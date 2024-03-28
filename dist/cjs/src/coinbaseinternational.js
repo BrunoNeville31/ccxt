@@ -16,7 +16,7 @@ class coinbaseinternational extends coinbaseinternational$1 {
     describe() {
         return this.deepExtend(super.describe(), {
             'id': 'coinbaseinternational',
-            'name': 'coinbase International',
+            'name': 'Coinbase International',
             'countries': ['US'],
             'certified': true,
             'pro': true,
@@ -117,10 +117,10 @@ class coinbaseinternational extends coinbaseinternational$1 {
                 },
                 'www': 'https://international.coinbase.com',
                 'doc': [
-                    'https://docs.cloud.coinbaseinternational.com/intx/docs',
+                    'https://docs.cloud.coinbase.com/intx/docs',
                 ],
                 'fees': [
-                    'https://help.coinbaseinternational.com/en/international-exchange/trading-deposits-withdrawals/international-exchange-fees',
+                    'https://help.coinbase.com/en/international-exchange/trading-deposits-withdrawals/international-exchange-fees',
                 ],
                 'referral': '',
             },

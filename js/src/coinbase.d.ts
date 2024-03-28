@@ -1,5 +1,5 @@
 import Exchange from './abstract/coinbase.js';
-import type { Int, OrderSide, OrderType, Order, Trade, OHLCV, Ticker, OrderBook, Str, Transaction, Balances, Tickers, Strings, Market, Currency, Num } from './base/types.js';
+import type { Int, OrderSide, OrderType, Order, Trade, OHLCV, Ticker, OrderBook, Str, Transaction, Balances, Tickers, Strings, Market, Currency, Num, Account } from './base/types.js';
 /**
  * @class coinbase
  * @augments Exchange
@@ -7,9 +7,9 @@ import type { Int, OrderSide, OrderType, Order, Trade, OHLCV, Ticker, OrderBook,
 export default class coinbase extends Exchange {
     describe(): any;
     fetchTime(params?: {}): Promise<number>;
-    fetchAccounts(params?: {}): Promise<any>;
-    fetchAccountsV2(params?: {}): Promise<any>;
-    fetchAccountsV3(params?: {}): Promise<any>;
+    fetchAccounts(params?: {}): Promise<Account[]>;
+    fetchAccountsV2(params?: {}): Promise<Account[]>;
+    fetchAccountsV3(params?: {}): Promise<Account[]>;
     parseAccount(account: any): {
         id: string;
         type: string;
@@ -30,7 +30,7 @@ export default class coinbase extends Exchange {
     parseTransactionStatus(status: any): string;
     parseTransaction(transaction: any, currency?: Currency): Transaction;
     parseTrade(trade: any, market?: Market): Trade;
-    fetchMarkets(params?: {}): Promise<any>;
+    fetchMarkets(params?: {}): Promise<Market[]>;
     fetchMarketsV2(params?: {}): Promise<any[]>;
     fetchMarketsV3(params?: {}): Promise<any[]>;
     fetchCurrenciesFromCache(params?: {}): Promise<import("./base/types.js").Dictionary<any>>;
@@ -64,7 +64,7 @@ export default class coinbase extends Exchange {
         status: string;
         fee: any;
     };
-    findAccountId(code: any): Promise<any>;
+    findAccountId(code: any, params?: {}): Promise<any>;
     prepareAccountRequest(limit?: Int, params?: {}): {
         account_id: string;
     };

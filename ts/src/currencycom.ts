@@ -6,7 +6,7 @@ import { BadSymbol, ExchangeError, ArgumentsRequired, ExchangeNotAvailable, Insu
 import { Precise } from './base/Precise.js';
 import { TICK_SIZE } from './base/functions/number.js';
 import { sha256 } from './static_dependencies/noble-hashes/sha256.js';
-import type { Balances, Currency, Int, Market, OHLCV, Order, OrderBook, OrderSide, OrderType, Str, Strings, Ticker, Tickers, Trade, Transaction, Leverage, Num } from './base/types.js';
+import type { Balances, Currency, Int, Market, OHLCV, Order, OrderBook, OrderSide, OrderType, Str, Strings, Ticker, Tickers, Trade, Transaction, Leverage, Num, Account } from './base/types.js';
 
 //  ---------------------------------------------------------------------------
 
@@ -394,7 +394,7 @@ export default class currencycom extends Exchange {
         return result;
     }
 
-    async fetchMarkets (params = {}) {
+    async fetchMarkets (params = {}): Promise<Market[]> {
         /**
          * @method
          * @name currencycom#fetchMarkets
@@ -584,7 +584,7 @@ export default class currencycom extends Exchange {
         return result;
     }
 
-    async fetchAccounts (params = {}) {
+    async fetchAccounts (params = {}): Promise<Account[]> {
         /**
          * @method
          * @name currencycom#fetchAccounts
@@ -1969,7 +1969,7 @@ export default class currencycom extends Exchange {
         //        ]
         //    }
         //
-        const data = this.safeValue (response, 'positions', []);
+        const data = this.safeList (response, 'positions', []);
         return this.parsePositions (data, symbols);
     }
 

@@ -25,7 +25,7 @@ class coinbaseinternational(Exchange, ImplicitAPI):
     def describe(self):
         return self.deep_extend(super(coinbaseinternational, self).describe(), {
             'id': 'coinbaseinternational',
-            'name': 'coinbase International',
+            'name': 'Coinbase International',
             'countries': ['US'],
             'certified': True,
             'pro': True,
@@ -126,10 +126,10 @@ class coinbaseinternational(Exchange, ImplicitAPI):
                 },
                 'www': 'https://international.coinbase.com',
                 'doc': [
-                    'https://docs.cloud.coinbaseinternational.com/intx/docs',
+                    'https://docs.cloud.coinbase.com/intx/docs',
                 ],
                 'fees': [
-                    'https://help.coinbaseinternational.com/en/international-exchange/trading-deposits-withdrawals/international-exchange-fees',
+                    'https://help.coinbase.com/en/international-exchange/trading-deposits-withdrawals/international-exchange-fees',
                 ],
                 'referral': '',
             },
@@ -894,7 +894,7 @@ class coinbaseinternational(Exchange, ImplicitAPI):
             },
         })
 
-    def fetch_markets(self, params={}):
+    def fetch_markets(self, params={}) -> List[Market]:
         """
         :see: https://docs.cloud.coinbase.com/intx/reference/getinstruments
         retrieves data on all markets for coinbaseinternational

@@ -1,5 +1,5 @@
 import Exchange from './abstract/woo.js';
-import type { TransferEntry, Balances, Currency, FundingRateHistory, Int, Market, Num, OHLCV, Order, OrderBook, OrderSide, OrderType, Str, Strings, Trade, Transaction, Leverage } from './base/types.js';
+import type { TransferEntry, Balances, Currency, FundingRateHistory, Int, Market, Num, OHLCV, Order, OrderBook, OrderSide, OrderType, Str, Strings, Trade, Transaction, Leverage, Account } from './base/types.js';
 /**
  * @class woo
  * @augments Exchange
@@ -14,7 +14,7 @@ export default class woo extends Exchange {
         info: any;
     }>;
     fetchTime(params?: {}): Promise<number>;
-    fetchMarkets(params?: {}): Promise<import("./base/types.js").MarketInterface[]>;
+    fetchMarkets(params?: {}): Promise<Market[]>;
     parseMarket(market: any): Market;
     fetchTrades(symbol: string, since?: Int, limit?: Int, params?: {}): Promise<Trade[]>;
     parseTrade(trade: any, market?: Market): Trade;
@@ -30,6 +30,8 @@ export default class woo extends Exchange {
     cancelAllOrders(symbol?: Str, params?: {}): Promise<any>;
     fetchOrder(id: string, symbol?: Str, params?: {}): Promise<Order>;
     fetchOrders(symbol?: Str, since?: Int, limit?: Int, params?: {}): Promise<Order[]>;
+    fetchOpenOrders(symbol?: Str, since?: Int, limit?: Int, params?: {}): Promise<Order[]>;
+    fetchClosedOrders(symbol?: Str, since?: Int, limit?: Int, params?: {}): Promise<Order[]>;
     parseTimeInForce(timeInForce: any): string;
     parseOrder(order: any, market?: Market): Order;
     parseOrderStatus(status: any): any;
@@ -38,7 +40,7 @@ export default class woo extends Exchange {
     parseOHLCV(ohlcv: any, market?: Market): OHLCV;
     fetchOrderTrades(id: string, symbol?: Str, since?: Int, limit?: Int, params?: {}): Promise<Trade[]>;
     fetchMyTrades(symbol?: Str, since?: Int, limit?: Int, params?: {}): Promise<Trade[]>;
-    fetchAccounts(params?: {}): Promise<any[]>;
+    fetchAccounts(params?: {}): Promise<Account[]>;
     parseAccount(account: any): {
         info: any;
         id: string;

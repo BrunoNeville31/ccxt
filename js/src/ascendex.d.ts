@@ -1,5 +1,5 @@
 import Exchange from './abstract/ascendex.js';
-import type { TransferEntry, FundingHistory, Int, OHLCV, Order, OrderSide, OrderType, OrderRequest, Str, Trade, Balances, Transaction, Ticker, OrderBook, Tickers, Strings, Num, Currency, Market, Leverage, Leverages, MarginModes, MarginMode } from './base/types.js';
+import type { TransferEntry, FundingHistory, Int, OHLCV, Order, OrderSide, OrderType, OrderRequest, Str, Trade, Balances, Transaction, Ticker, OrderBook, Tickers, Strings, Num, Currency, Market, Leverage, Leverages, Account, MarginModes, MarginMode } from './base/types.js';
 /**
  * @class ascendex
  * @augments Exchange
@@ -8,14 +8,9 @@ export default class ascendex extends Exchange {
     describe(): any;
     getAccount(params?: {}): string;
     fetchCurrencies(params?: {}): Promise<{}>;
-    fetchMarkets(params?: {}): Promise<any[]>;
+    fetchMarkets(params?: {}): Promise<Market[]>;
     fetchTime(params?: {}): Promise<number>;
-    fetchAccounts(params?: {}): Promise<{
-        id: string;
-        type: any;
-        currency: any;
-        info: any;
-    }[]>;
+    fetchAccounts(params?: {}): Promise<Account[]>;
     parseBalance(response: any): Balances;
     parseMarginBalance(response: any): Balances;
     parseSwapBalance(response: any): Balances;

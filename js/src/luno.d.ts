@@ -1,13 +1,13 @@
 import Exchange from './abstract/luno.js';
-import type { Balances, Currency, Int, Market, Order, OrderBook, OrderSide, OrderType, Str, Strings, Ticker, Tickers, Trade, OHLCV, Num } from './base/types.js';
+import type { Balances, Currency, Int, Market, Order, OrderBook, OrderSide, OrderType, Str, Strings, Ticker, Tickers, Trade, OHLCV, Num, Account } from './base/types.js';
 /**
  * @class luno
  * @augments Exchange
  */
 export default class luno extends Exchange {
     describe(): any;
-    fetchMarkets(params?: {}): Promise<any[]>;
-    fetchAccounts(params?: {}): Promise<any[]>;
+    fetchMarkets(params?: {}): Promise<Market[]>;
+    fetchAccounts(params?: {}): Promise<Account[]>;
     parseBalance(response: any): Balances;
     fetchBalance(params?: {}): Promise<Balances>;
     fetchOrderBook(symbol: string, limit?: Int, params?: {}): Promise<OrderBook>;

@@ -6,7 +6,7 @@ import { ArgumentsRequired, AuthenticationError, ExchangeError, InsufficientFund
 import { Precise } from './base/Precise.js';
 import { TICK_SIZE } from './base/functions/number.js';
 import { sha256 } from './static_dependencies/noble-hashes/sha256.js';
-import type { TransferEntry, FundingHistory, Int, OHLCV, Order, OrderSide, OrderType, OrderRequest, Str, Trade, Balances, Transaction, Ticker, OrderBook, Tickers, Strings, Num, Currency, Market, Leverage, Leverages, MarginModes, MarginMode } from './base/types.js';
+import type { TransferEntry, FundingHistory, Int, OHLCV, Order, OrderSide, OrderType, OrderRequest, Str, Trade, Balances, Transaction, Ticker, OrderBook, Tickers, Strings, Num, Currency, Market, Leverage, Leverages, Account, MarginModes, MarginMode } from './base/types.js';
 
 //  ---------------------------------------------------------------------------
 
@@ -498,7 +498,7 @@ export default class ascendex extends Exchange {
         return result;
     }
 
-    async fetchMarkets (params = {}) {
+    async fetchMarkets (params = {}): Promise<Market[]> {
         /**
          * @method
          * @name ascendex#fetchMarkets
@@ -721,7 +721,7 @@ export default class ascendex extends Exchange {
         return this.safeInteger (data, 'requestReceiveAt');
     }
 
-    async fetchAccounts (params = {}) {
+    async fetchAccounts (params = {}): Promise<Account[]> {
         /**
          * @method
          * @name ascendex#fetchAccounts
@@ -757,7 +757,7 @@ export default class ascendex extends Exchange {
             {
                 'id': accountGroup,
                 'type': undefined,
-                'currency': undefined,
+                'code': undefined,
                 'info': response,
             },
         ];
@@ -1041,7 +1041,7 @@ export default class ascendex extends Exchange {
         //         }
         //     }
         //
-        const data = this.safeValue (response, 'data', {});
+        const data = this.safeDict (response, 'data', {});
         return this.parseTicker (data, market);
     }
 
@@ -1180,7 +1180,7 @@ export default class ascendex extends Exchange {
         //         ]
         //     }
         //
-        const data = this.safeValue (response, 'data', []);
+        const data = this.safeList (response, 'data', []);
         return this.parseOHLCVs (data, market, timeframe, since, limit);
     }
 
@@ -1255,7 +1255,7 @@ export default class ascendex extends Exchange {
         //     }
         //
         const records = this.safeValue (response, 'data', []);
-        const trades = this.safeValue (records, 'data', []);
+        const trades = this.safeList (records, 'data', []);
         return this.parseTrades (trades, market, since, limit);
     }
 
@@ -1783,7 +1783,7 @@ export default class ascendex extends Exchange {
         //     }
         //
         const data = this.safeValue (response, 'data', {});
-        const info = this.safeValue (data, 'info', []);
+        const info = this.safeList (data, 'info', []);
         return this.parseOrders (info, market);
     }
 
@@ -1890,7 +1890,7 @@ export default class ascendex extends Exchange {
         //         }
         //     }
         //
-        const data = this.safeValue (response, 'data', {});
+        const data = this.safeDict (response, 'data', {});
         return this.parseOrder (data, market);
     }
 
@@ -2579,7 +2579,7 @@ export default class ascendex extends Exchange {
         //     }
         //
         const data = this.safeValue (response, 'data', {});
-        const transactions = this.safeValue (data, 'data', []);
+        const transactions = this.safeList (data, 'data', []);
         return this.parseTransactions (transactions, currency, since, limit);
     }
 
@@ -2744,7 +2744,8 @@ export default class ascendex extends Exchange {
         if (Precise.stringEq (notional, '0')) {
             notional = this.safeString (position, 'sellOpenOrderNotional');
         }
-        const marginMode = this.safeString (position, 'marginType');
+        const marginType = this.safeString (position, 'marginType');
+        const marginMode = (marginType === 'crossed') ? 'cross' : 'isolated';
         let collateral = undefined;
         if (marginMode === 'isolated') {
             collateral = this.safeString (position, 'isolatedMargin');
@@ -3153,7 +3154,7 @@ export default class ascendex extends Exchange {
          */
         await this.loadMarkets ();
         const response = await this.v2PublicGetAssets (params);
-        const data = this.safeValue (response, 'data');
+        const data = this.safeList (response, 'data');
         return this.parseDepositWithdrawFees (data, codes, 'assetCode');
     }
 
@@ -3283,7 +3284,7 @@ export default class ascendex extends Exchange {
         //     }
         //
         const data = this.safeValue (response, 'data', {});
-        const rows = this.safeValue (data, 'data', []);
+        const rows = this.safeList (data, 'data', []);
         return this.parseIncomes (rows, market, since, limit);
     }
 

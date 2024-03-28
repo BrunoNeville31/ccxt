@@ -8,7 +8,7 @@ import type { IndexType, Int, OrderSide, OrderType, OHLCV, Trade, Order, Balance
 export default class kraken extends Exchange {
     describe(): any;
     feeToPrecision(symbol: any, fee: any): any;
-    fetchMarkets(params?: {}): Promise<any[]>;
+    fetchMarkets(params?: {}): Promise<Market[]>;
     safeCurrency(currencyId: any, currency?: Currency): import("./base/types.js").CurrencyInterface;
     appendInactiveMarkets(result: any): any;
     fetchCurrencies(params?: {}): Promise<{}>;
@@ -112,7 +112,7 @@ export default class kraken extends Exchange {
     };
     withdraw(code: string, amount: number, address: any, tag?: any, params?: {}): Promise<Transaction>;
     fetchPositions(symbols?: Strings, params?: {}): Promise<any>;
-    parseAccount(account: any): string;
+    parseAccountType(account: any): string;
     transferOut(code: string, amount: any, params?: {}): Promise<TransferEntry>;
     transfer(code: string, amount: number, fromAccount: string, toAccount: string, params?: {}): Promise<TransferEntry>;
     parseTransfer(transfer: any, currency?: Currency): {

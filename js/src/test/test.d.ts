@@ -18,6 +18,7 @@ declare class baseMainTestClass {
     privateTestOnly: boolean;
     loadKeys: boolean;
     sandbox: boolean;
+    skippedSettingsForExchange: {};
     skippedMethods: {};
     checkedPublicTests: {};
     testFiles: {};
@@ -41,7 +42,7 @@ export default class testMainClass extends baseMainTestClass {
     exchangeHint(exchange: any, market?: any): string;
     testMethod(methodName: string, exchange: any, args: any[], isPublic: boolean): Promise<void>;
     getSkips(exchange: any, methodName: any): any;
-    testSafe(methodName: any, exchange: any, args?: any[], isPublic?: boolean): Promise<boolean>;
+    testSafe(methodName: any, exchange: any, args?: any[], isPublic?: boolean): Promise<any>;
     runPublicTests(exchange: any, symbol: any): Promise<void>;
     runTests(exchange: any, tests: any, isPublicTest: boolean): Promise<void>;
     loadExchange(exchange: any): Promise<boolean>;

@@ -53,6 +53,7 @@ Strings = Optional[List[str]]
 Int = Optional[int]
 Bool = Optional[bool]
 MarketType = Literal['spot', 'margin', 'swap', 'future', 'option']
+SubType = Literal['linear', 'inverse']
 
 
 class FeeInterface(TypedDict):
@@ -71,10 +72,17 @@ class Balance(TypedDict):
     debt: NotRequired[Num]
 
 
-class Account(TypedDict):
+class BalanceAccount(TypedDict):
     free: Str
     used: Str
     total: Str
+
+
+class Account(TypedDict):
+    id: Str
+    type: Str
+    code: Str
+    info: Dict[str, Any]
 
 
 class Trade(TypedDict):
@@ -293,6 +301,28 @@ class Greeks(TypedDict):
     underlyingPrice: Num
     info: Dict[str, Any]
 
+
+class Option(TypedDict):
+    info: Dict[str, Any]
+    currency: Str
+    symbol: Str
+    timestamp: Int
+    datetime: Str
+    impliedVolatility: Num
+    openInterest: Num
+    bidPrice: Num
+    askPrice: Num
+    midPrice: Num
+    markPrice: Num
+    lastPrice: Num
+    underlyingPrice: Num
+    change: Num
+    percentage: Num
+    baseVolume: Num
+    quoteVolume: Num
+
+
+OptionChain = Dict[str, Option]
 
 class MarketInterface(TypedDict):
     info: Dict[str, Any]

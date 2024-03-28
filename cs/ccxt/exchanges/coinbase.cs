@@ -1082,7 +1082,11 @@ public partial class coinbase : Exchange
         */
         parameters ??= new Dictionary<string, object>();
         object method = this.safeString(this.options, "fetchMarkets", "fetchMarketsV3");
-        return await ((Task<object>)callDynamically(this, method, new object[] { parameters }));
+        if (isTrue(isEqual(method, "fetchMarketsV3")))
+        {
+            return await this.fetchMarketsV3(parameters);
+        }
+        return await this.fetchMarketsV2(parameters);
     }
 
     public async virtual Task<object> fetchMarketsV2(object parameters = null)
@@ -1166,7 +1170,10 @@ public partial class coinbase : Exchange
     public async virtual Task<object> fetchMarketsV3(object parameters = null)
     {
         parameters ??= new Dictionary<string, object>();
-        object response = await this.v3PrivateGetBrokerageProducts(parameters);
+        object promisesUnresolved = new List<object> {this.v3PrivateGetBrokerageProducts(parameters), this.v3PrivateGetBrokerageTransactionSummary(parameters)};
+        // const response = await this.v3PrivateGetBrokerageProducts (params);
+        object promises = await promiseAll(promisesUnresolved);
+        object response = this.safeDict(promises, 0, new Dictionary<string, object>() {});
         //
         //     [
         //         {
@@ -1201,7 +1208,8 @@ public partial class coinbase : Exchange
         //         ...
         //     ]
         //
-        object fees = await this.v3PrivateGetBrokerageTransactionSummary(parameters);
+        // const fees = await this.v3PrivateGetBrokerageTransactionSummary (params);
+        object fees = this.safeDict(promises, 1, new Dictionary<string, object>() {});
         //
         //     {
         //         "total_volume": 0,
@@ -1350,7 +1358,7 @@ public partial class coinbase : Exchange
         */
         parameters ??= new Dictionary<string, object>();
         object response = await this.fetchCurrenciesFromCache(parameters);
-        object currencies = this.safeDict(response, "currencies", new Dictionary<string, object>() {});
+        object currencies = this.safeList(response, "currencies", new List<object>() {});
         //
         // fiat
         //
@@ -1945,10 +1953,19 @@ public partial class coinbase : Exchange
         * @param {int} [since] timestamp in ms of the earliest ledger entry, default is undefined
         * @param {int} [limit] max number of ledger entrys to return, default is undefined
         * @param {object} [params] extra parameters specific to the exchange API endpoint
+        * @param {boolean} [params.paginate] default false, when true will automatically paginate by calling this endpoint multiple times. See in the docs all the [availble parameters](https://github.com/ccxt/ccxt/wiki/Manual#pagination-params)
         * @returns {object} a [ledger structure]{@link https://docs.ccxt.com/#/?id=ledger-structure}
         */
         parameters ??= new Dictionary<string, object>();
         await this.loadMarkets();
+        object paginate = false;
+        var paginateparametersVariable = this.handleOptionAndParams(parameters, "fetchLedger", "paginate");
+        paginate = ((IList<object>)paginateparametersVariable)[0];
+        parameters = ((IList<object>)paginateparametersVariable)[1];
+        if (isTrue(paginate))
+        {
+            return await this.fetchPaginatedCallCursor("fetchLedger", code, since, limit, parameters, "next_starting_after", "starting_after", null, 100);
+        }
         object currency = null;
         if (isTrue(!isEqual(code, null)))
         {
@@ -1962,7 +1979,22 @@ public partial class coinbase : Exchange
         // the value for the next page can be obtained from the result of the previous call in the 'pagination' field
         // eg: instance.last_json_response.pagination.next_starting_after
         object response = await this.v2PrivateGetAccountsAccountIdTransactions(this.extend(request, parameters));
-        return this.parseLedger(getValue(response, "data"), currency, since, limit);
+        object ledger = this.parseLedger(getValue(response, "data"), currency, since, limit);
+        object length = getArrayLength(ledger);
+        if (isTrue(isEqual(length, 0)))
+        {
+            return ledger;
+        }
+        object lastIndex = subtract(length, 1);
+        object last = this.safeDict(ledger, lastIndex);
+        object pagination = this.safeDict(response, "pagination", new Dictionary<string, object>() {});
+        object cursor = this.safeString(pagination, "next_starting_after");
+        if (isTrue(isTrue((!isEqual(cursor, null))) && isTrue((!isEqual(cursor, "")))))
+        {
+            ((IDictionary<string,object>)last)["next_starting_after"] = cursor;
+            ((List<object>)ledger)[Convert.ToInt32(lastIndex)] = last;
+        }
+        return ledger;
     }
 
     public virtual object parseLedgerEntryStatus(object status)
@@ -2304,10 +2336,11 @@ public partial class coinbase : Exchange
         };
     }
 
-    public async virtual Task<object> findAccountId(object code)
+    public async virtual Task<object> findAccountId(object code, object parameters = null)
     {
+        parameters ??= new Dictionary<string, object>();
         await this.loadMarkets();
-        await this.loadAccounts();
+        await this.loadAccounts(false, parameters);
         for (object i = 0; isLessThan(i, getArrayLength(this.accounts)); postFixIncrement(ref i))
         {
             object account = getValue(this.accounts, i);
@@ -2348,7 +2381,7 @@ public partial class coinbase : Exchange
             {
                 throw new ArgumentsRequired ((string)add(this.id, " prepareAccountRequestWithCurrencyCode() method requires an account_id (or accountId) parameter OR a currency code argument")) ;
             }
-            accountId = await this.findAccountId(code);
+            accountId = await this.findAccountId(code, parameters);
             if (isTrue(isEqual(accountId, null)))
             {
                 throw new ExchangeError ((string)add(add(this.id, " prepareAccountRequestWithCurrencyCode() could not find account id for "), code)) ;
@@ -3032,7 +3065,7 @@ public partial class coinbase : Exchange
         parameters = ((IList<object>)paginateparametersVariable)[1];
         if (isTrue(paginate))
         {
-            return await this.fetchPaginatedCallCursor("fetchOrders", symbol, since, limit, parameters, "cursor", "cursor", null, 100);
+            return await this.fetchPaginatedCallCursor("fetchOrders", symbol, since, limit, parameters, "cursor", "cursor", null, 1000);
         }
         object market = null;
         if (isTrue(!isEqual(symbol, null)))
@@ -3628,7 +3661,7 @@ public partial class coinbase : Exchange
             {
                 throw new ArgumentsRequired ((string)add(this.id, " withdraw() requires an account_id (or accountId) parameter OR a currency code argument")) ;
             }
-            accountId = await this.findAccountId(code);
+            accountId = await this.findAccountId(code, parameters);
             if (isTrue(isEqual(accountId, null)))
             {
                 throw new ExchangeError ((string)add(add(this.id, " withdraw() could not find account id for "), code)) ;
@@ -3867,7 +3900,7 @@ public partial class coinbase : Exchange
             {
                 throw new ArgumentsRequired ((string)add(this.id, " deposit() requires an account_id (or accountId) parameter OR a currency code argument")) ;
             }
-            accountId = await this.findAccountId(code);
+            accountId = await this.findAccountId(code, parameters);
             if (isTrue(isEqual(accountId, null)))
             {
                 throw new ExchangeError ((string)add(add(this.id, " deposit() could not find account id for "), code)) ;
@@ -3943,7 +3976,7 @@ public partial class coinbase : Exchange
             {
                 throw new ArgumentsRequired ((string)add(this.id, " fetchDeposit() requires an account_id (or accountId) parameter OR a currency code argument")) ;
             }
-            accountId = await this.findAccountId(code);
+            accountId = await this.findAccountId(code, parameters);
             if (isTrue(isEqual(accountId, null)))
             {
                 throw new ExchangeError ((string)add(add(this.id, " fetchDeposit() could not find account id for "), code)) ;
