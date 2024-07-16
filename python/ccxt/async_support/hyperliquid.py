@@ -5,10 +5,12 @@
 
 from ccxt.async_support.base.exchange import Exchange
 from ccxt.abstract.hyperliquid import ImplicitAPI
-from ccxt.base.types import Balances, Int, Market, Num, Order, OrderBook, OrderRequest, OrderSide, OrderType, Str, Strings, Trade, TransferEntry
+import asyncio
+from ccxt.base.types import Balances, Currencies, Currency, Int, MarginModification, Market, Num, Order, OrderBook, OrderRequest, CancellationRequest, OrderSide, OrderType, Str, Strings, Trade, TradingFeeInterface, Transaction, TransferEntry
 from typing import List
 from ccxt.base.errors import ExchangeError
 from ccxt.base.errors import ArgumentsRequired
+from ccxt.base.errors import BadRequest
 from ccxt.base.errors import InvalidOrder
 from ccxt.base.errors import OrderNotFound
 from ccxt.base.errors import NotSupported
@@ -30,9 +32,10 @@ class hyperliquid(Exchange, ImplicitAPI):
             'rateLimit': 50,  # 1200 requests per minute, 20 request per second
             'certified': False,
             'pro': True,
+            'dex': True,
             'has': {
                 'CORS': None,
-                'spot': False,
+                'spot': True,
                 'margin': False,
                 'swap': True,
                 'future': True,
@@ -41,8 +44,10 @@ class hyperliquid(Exchange, ImplicitAPI):
                 'borrowCrossMargin': False,
                 'borrowIsolatedMargin': False,
                 'cancelAllOrders': False,
+                'cancelAllOrdersAfter': True,
                 'cancelOrder': True,
                 'cancelOrders': True,
+                'cancelOrdersForSymbols': True,
                 'closeAllPositions': False,
                 'closePosition': False,
                 'createMarketBuyOrderWithCost': False,
@@ -101,7 +106,7 @@ class hyperliquid(Exchange, ImplicitAPI):
                 'fetchTickers': False,
                 'fetchTime': False,
                 'fetchTrades': True,
-                'fetchTradingFee': False,
+                'fetchTradingFee': True,
                 'fetchTradingFees': False,
                 'fetchTransfer': False,
                 'fetchTransfers': False,
@@ -110,6 +115,7 @@ class hyperliquid(Exchange, ImplicitAPI):
                 'reduceMargin': True,
                 'repayCrossMargin': False,
                 'repayIsolatedMargin': False,
+                'sandbox': True,
                 'setLeverage': True,
                 'setMarginMode': True,
                 'setPositionMode': False,
@@ -165,6 +171,10 @@ class hyperliquid(Exchange, ImplicitAPI):
                     'taker': self.parse_number('0.00035'),
                     'maker': self.parse_number('0.0001'),
                 },
+                'spot': {
+                    'taker': self.parse_number('0.00035'),
+                    'maker': self.parse_number('0.0001'),
+                },
             },
             'requiredCredentials': {
                 'apiKey': False,
@@ -192,6 +202,7 @@ class hyperliquid(Exchange, ImplicitAPI):
             'commonCurrencies': {
             },
             'options': {
+                'defaultType': 'swap',
                 'sandboxMode': False,
                 'defaultSlippage': 0.05,
                 'zeroAddress': '0x0000000000000000000000000000000000000000',
@@ -202,14 +213,14 @@ class hyperliquid(Exchange, ImplicitAPI):
         super(hyperliquid, self).set_sandbox_mode(enabled)
         self.options['sandboxMode'] = enabled
 
-    async def fetch_currencies(self, params={}):
+    async def fetch_currencies(self, params={}) -> Currencies:
         """
         fetches all available currencies on an exchange
         :see: https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint#retrieve-exchange-metadata
         :param dict [params]: extra parameters specific to the exchange API endpoint
         :returns dict: an associative dictionary of currencies
         """
-        request = {
+        request: dict = {
             'type': 'meta',
         }
         response = await self.publicPostInfo(self.extend(request, params))
@@ -228,7 +239,7 @@ class hyperliquid(Exchange, ImplicitAPI):
         #     ]
         #
         meta = self.safe_list(response, 'universe', [])
-        result = {}
+        result: dict = {}
         for i in range(0, len(meta)):
             data = self.safe_dict(meta, i, {})
             id = i
@@ -245,8 +256,16 @@ class hyperliquid(Exchange, ImplicitAPI):
                 'withdraw': None,
                 'networks': None,
                 'fee': None,
-                # 'fees': fees,
-                'limits': None,
+                'limits': {
+                    'amount': {
+                        'min': None,
+                        'max': None,
+                    },
+                    'withdraw': {
+                        'min': None,
+                        'max': None,
+                    },
+                },
             }
         return result
 
@@ -257,7 +276,23 @@ class hyperliquid(Exchange, ImplicitAPI):
         :param dict [params]: extra parameters specific to the exchange API endpoint
         :returns dict[]: an array of objects representing market data
         """
-        request = {
+        rawPromises = [
+            self.fetch_swap_markets(params),
+            self.fetch_spot_markets(params),
+        ]
+        promises = await asyncio.gather(*rawPromises)
+        swapMarkets = promises[0]
+        spotMarkets = promises[1]
+        return self.array_concat(swapMarkets, spotMarkets)
+
+    async def fetch_swap_markets(self, params={}) -> List[Market]:
+        """
+        retrieves data on all swap markets for hyperliquid
+        :see: https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint#retrieve-asset-contexts-includes-mark-price-current-funding-open-interest-etc
+        :param dict [params]: extra parameters specific to the exchange API endpoint
+        :returns dict[]: an array of objects representing market data
+        """
+        request: dict = {
             'type': 'metaAndAssetCtxs',
         }
         response = await self.publicPostInfo(self.extend(request, params))
@@ -291,6 +326,7 @@ class hyperliquid(Exchange, ImplicitAPI):
         #         ]
         #     ]
         #
+        #
         meta = self.safe_dict(response, 0, {})
         meta = self.safe_list(meta, 'universe', [])
         assetCtxs = self.safe_dict(response, 1, {})
@@ -304,7 +340,199 @@ class hyperliquid(Exchange, ImplicitAPI):
             result.append(data)
         return self.parse_markets(result)
 
-    def parse_market(self, market) -> Market:
+    async def fetch_spot_markets(self, params={}) -> List[Market]:
+        """
+        retrieves data on all spot markets for hyperliquid
+        :see: https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint#retrieve-asset-contexts-includes-mark-price-current-funding-open-interest-etc
+        :param dict [params]: extra parameters specific to the exchange API endpoint
+        :returns dict[]: an array of objects representing market data
+        """
+        request: dict = {
+            'type': 'spotMetaAndAssetCtxs',
+        }
+        response = await self.publicPostInfo(self.extend(request, params))
+        #
+        # [
+        #     {
+        #         'tokens': [
+        #             {
+        #                 'name': 'USDC',
+        #                 'szDecimals': '8',
+        #                 'weiDecimals': '8',
+        #             },
+        #             {
+        #                 'name': 'PURR',
+        #                 'szDecimals': '0',
+        #                 'weiDecimals': '5',
+        #             },
+        #         ],
+        #         'universe': [
+        #             {
+        #                 'name': 'PURR/USDC',
+        #                 'tokens': [
+        #                     1,
+        #                     0,
+        #                 ],
+        #             },
+        #         ],
+        #     },
+        #     [
+        #         {
+        #             'dayNtlVlm': '264250385.14640012',
+        #             'markPx': '0.018314',
+        #             'midPx': '0.0182235',
+        #             'prevDayPx': '0.017427',
+        #         },
+        #     ],
+        # ]
+        # mainnet
+        # [
+        #     {
+        #        "canonical_tokens2":[
+        #           0,
+        #           1
+        #        ],
+        #        "spot_infos":[
+        #           {
+        #              "name":"PURR/USDC",
+        #              "tokens":[
+        #                 1,
+        #                 0
+        #              ]
+        #           }
+        #        ],
+        #        "token_id_to_token":[
+        #           [
+        #              "0x6d1e7cde53ba9467b783cb7c530ce054",
+        #              0
+        #           ],
+        #           [
+        #              "0xc1fb593aeffbeb02f85e0308e9956a90",
+        #              1
+        #           ]
+        #        ],
+        #        "token_infos":[
+        #           {
+        #              "deployer":null,
+        #              "spec":{
+        #                 "name":"USDC",
+        #                 "szDecimals":"8",
+        #                 "weiDecimals":"8"
+        #              },
+        #              "spots":[
+        #              ]
+        #           },
+        #           {
+        #              "deployer":null,
+        #              "spec":{
+        #                 "name":"PURR",
+        #                 "szDecimals":"0",
+        #                 "weiDecimals":"5"
+        #              },
+        #              "spots":[
+        #                 0
+        #              ]
+        #           }
+        #        ]
+        #     },
+        #     [
+        #        {
+        #           "dayNtlVlm":"35001170.16631",
+        #           "markPx":"0.15743",
+        #           "midPx":"0.157555",
+        #           "prevDayPx":"0.158"
+        #        }
+        #     ]
+        # ]
+        #
+        # response differs depending on the environment(mainnet vs sandbox)
+        first = self.safe_dict(response, 0, {})
+        meta = self.safe_list_2(first, 'universe', 'spot_infos', [])
+        tokens = self.safe_list_2(first, 'tokens', 'token_infos', [])
+        markets = []
+        for i in range(0, len(meta)):
+            market = self.safe_dict(meta, i, {})
+            marketName = self.safe_string(market, 'name')
+            # if marketName.find('/') < 0:
+            #     # there are some weird spot markets in testnet, eg @2
+            #     continue
+            # }
+            # marketParts = marketName.split('/')
+            # baseName = self.safe_string(marketParts, 0)
+            # quoteId = self.safe_string(marketParts, 1)
+            fees = self.safe_dict(self.fees, 'spot', {})
+            taker = self.safe_number(fees, 'taker')
+            maker = self.safe_number(fees, 'maker')
+            tokensPos = self.safe_list(market, 'tokens', [])
+            baseTokenPos = self.safe_integer(tokensPos, 0)
+            quoteTokenPos = self.safe_integer(tokensPos, 1)
+            baseTokenInfo = self.safe_dict(tokens, baseTokenPos, {})
+            quoteTokenInfo = self.safe_dict(tokens, quoteTokenPos, {})
+            baseName = self.safe_string(baseTokenInfo, 'name')
+            quoteId = self.safe_string(quoteTokenInfo, 'name')
+            base = self.safe_currency_code(baseName)
+            quote = self.safe_currency_code(quoteId)
+            symbol = base + '/' + quote
+            innerBaseTokenInfo = self.safe_dict(baseTokenInfo, 'spec', baseTokenInfo)
+            # innerQuoteTokenInfo = self.safe_dict(quoteTokenInfo, 'spec', quoteTokenInfo)
+            amountPrecision = self.parse_number(self.parse_precision(self.safe_string(innerBaseTokenInfo, 'szDecimals')))
+            # quotePrecision = self.parse_number(self.parse_precision(self.safe_string(innerQuoteTokenInfo, 'szDecimals')))
+            baseId = self.number_to_string(i + 10000)
+            markets.append(self.safe_market_structure({
+                'id': marketName,
+                'symbol': symbol,
+                'base': base,
+                'quote': quote,
+                'settle': None,
+                'baseId': baseId,
+                'quoteId': quoteId,
+                'settleId': None,
+                'type': 'spot',
+                'spot': True,
+                'subType': None,
+                'margin': None,
+                'swap': False,
+                'future': False,
+                'option': False,
+                'active': True,
+                'contract': False,
+                'linear': None,
+                'inverse': None,
+                'taker': taker,
+                'maker': maker,
+                'contractSize': None,
+                'expiry': None,
+                'expiryDatetime': None,
+                'strike': None,
+                'optionType': None,
+                'precision': {
+                    'amount': amountPrecision,  # decimal places
+                    'price': 5,  # significant digits
+                },
+                'limits': {
+                    'leverage': {
+                        'min': None,
+                        'max': None,
+                    },
+                    'amount': {
+                        'min': None,
+                        'max': None,
+                    },
+                    'price': {
+                        'min': None,
+                        'max': None,
+                    },
+                    'cost': {
+                        'min': None,
+                        'max': None,
+                    },
+                },
+                'created': None,
+                'info': market,
+            }))
+        return markets
+
+    def parse_market(self, market: dict) -> Market:
         #
         #     {
         #         "maxLeverage": "50",
@@ -373,7 +601,7 @@ class hyperliquid(Exchange, ImplicitAPI):
             'limits': {
                 'leverage': {
                     'min': None,
-                    'max': None,
+                    'max': self.safe_integer(market, 'maxLeverage'),
                 },
                 'amount': {
                     'min': None,
@@ -398,12 +626,17 @@ class hyperliquid(Exchange, ImplicitAPI):
         :see: https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint#retrieve-a-users-state
         :param dict [params]: extra parameters specific to the exchange API endpoint
         :param str [params.user]: user address, will default to self.walletAddress if not provided
+        :param str [params.type]: wallet type, ['spot', 'swap'], defaults to swap
         :returns dict: a `balance structure <https://docs.ccxt.com/#/?id=balance-structure>`
         """
         userAddress = None
         userAddress, params = self.handle_public_address('fetchBalance', params)
-        request = {
-            'type': 'clearinghouseState',
+        type = None
+        type, params = self.handle_market_type_and_params('fetchBalance', None, params)
+        isSpot = (type == 'spot')
+        reqType = 'spotClearinghouseState' if (isSpot) else 'clearinghouseState'
+        request: dict = {
+            'type': reqType,
             'user': userAddress,
         }
         response = await self.publicPostInfo(self.extend(request, params))
@@ -426,9 +659,37 @@ class hyperliquid(Exchange, ImplicitAPI):
         #         "time": "1704261007014",
         #         "withdrawable": "100.0"
         #     }
+        # spot
         #
+        #     {
+        #         "balances":[
+        #            {
+        #               "coin":"USDC",
+        #               "hold":"0.0",
+        #               "total":"1481.844"
+        #            },
+        #            {
+        #               "coin":"PURR",
+        #               "hold":"0.0",
+        #               "total":"999.65004"
+        #            }
+        #     }
+        #
+        balances = self.safe_list(response, 'balances')
+        if balances is not None:
+            spotBalances: dict = {'info': response}
+            for i in range(0, len(balances)):
+                balance = balances[i]
+                code = self.safe_currency_code(self.safe_string(balance, 'coin'))
+                account = self.account()
+                total = self.safe_string(balance, 'total')
+                free = self.safe_string(balance, 'hold')
+                account['total'] = total
+                account['free'] = free
+                spotBalances[code] = account
+            return self.safe_balance(spotBalances)
         data = self.safe_dict(response, 'marginSummary', {})
-        result = {
+        result: dict = {
             'info': response,
             'USDC': {
                 'total': self.safe_float(data, 'accountValue'),
@@ -451,9 +712,9 @@ class hyperliquid(Exchange, ImplicitAPI):
         """
         await self.load_markets()
         market = self.market(symbol)
-        request = {
+        request: dict = {
             'type': 'l2Book',
-            'coin': market['base'],
+            'coin': market['base'] if market['swap'] else market['id'],
         }
         response = await self.publicPostInfo(self.extend(request, params))
         #
@@ -479,7 +740,7 @@ class hyperliquid(Exchange, ImplicitAPI):
         #     }
         #
         data = self.safe_list(response, 'levels', [])
-        result = {
+        result: dict = {
             'bids': self.safe_list(data, 0, []),
             'asks': self.safe_list(data, 1, []),
         }
@@ -506,10 +767,10 @@ class hyperliquid(Exchange, ImplicitAPI):
         if limit is None:
             limit = 500
         params = self.omit(params, ['until'])
-        request = {
+        request: dict = {
             'type': 'candleSnapshot',
             'req': {
-                'coin': market['base'],
+                'coin': market['base'] if market['swap'] else market['id'],
                 'interval': timeframe,
                 'startTime': since,
                 'endTime': until,
@@ -576,7 +837,7 @@ class hyperliquid(Exchange, ImplicitAPI):
         userAddress, params = self.handle_public_address('fetchTrades', params)
         await self.load_markets()
         market = self.safe_market(symbol)
-        request = {
+        request: dict = {
             'user': userAddress,
         }
         if since is not None:
@@ -612,6 +873,9 @@ class hyperliquid(Exchange, ImplicitAPI):
         return self.parse_trades(response, market, since, limit)
 
     def amount_to_precision(self, symbol, amount):
+        market = self.market(symbol)
+        if market['spot']:
+            return super(hyperliquid, self).amount_to_precision(symbol, amount)
         return self.decimal_to_precision(amount, ROUND, self.markets[symbol]['precision']['amount'], self.precisionMode)
 
     def price_to_precision(self, symbol: str, price) -> str:
@@ -657,7 +921,7 @@ class hyperliquid(Exchange, ImplicitAPI):
         hash = self.action_hash(action, vaultAdress, nonce)
         isTestnet = self.safe_bool(self.options, 'sandboxMode', False)
         phantomAgent = self.construct_phantom_agent(hash, isTestnet)
-        # data = {
+        # data: Dict = {
         #     'domain': {
         #         'chainId': 1337,
         #         'name': 'Exchange',
@@ -681,13 +945,13 @@ class hyperliquid(Exchange, ImplicitAPI):
         # }
         zeroAddress = self.safe_string(self.options, 'zeroAddress')
         chainId = 1337  # check self out
-        domain = {
+        domain: dict = {
             'chainId': chainId,
             'name': 'Exchange',
             'verifyingContract': zeroAddress,
             'version': '1',
         }
-        messageTypes = {
+        messageTypes: dict = {
             'Agent': [
                 {'name': 'source', 'type': 'string'},
                 {'name': 'connectionId', 'type': 'bytes32'},
@@ -697,11 +961,12 @@ class hyperliquid(Exchange, ImplicitAPI):
         signature = self.sign_message(msg, self.privateKey)
         return signature
 
-    def build_sig(self, chainId, messageTypes, message):
+    def sign_user_signed_action(self, messageTypes, message):
         zeroAddress = self.safe_string(self.options, 'zeroAddress')
-        domain = {
+        chainId = 421614  # check self out
+        domain: dict = {
             'chainId': chainId,
-            'name': 'Exchange',
+            'name': 'HyperliquidSignTransaction',
             'verifyingContract': zeroAddress,
             'version': '1',
         }
@@ -710,28 +975,26 @@ class hyperliquid(Exchange, ImplicitAPI):
         return signature
 
     def build_transfer_sig(self, message):
-        isSandboxMode = self.safe_bool(self.options, 'sandboxMode')
-        chainId = 421614 if (isSandboxMode) else 42161
-        messageTypes = {
-            'UsdTransferSignPayload': [
+        messageTypes: dict = {
+            'HyperliquidTransaction:UsdSend': [
+                {'name': 'hyperliquidChain', 'type': 'string'},
                 {'name': 'destination', 'type': 'string'},
                 {'name': 'amount', 'type': 'string'},
                 {'name': 'time', 'type': 'uint64'},
             ],
         }
-        return self.build_sig(chainId, messageTypes, message)
+        return self.sign_user_signed_action(messageTypes, message)
 
     def build_withdraw_sig(self, message):
-        isSandboxMode = self.safe_bool(self.options, 'sandboxMode')
-        chainId = 421614 if (isSandboxMode) else 42161
-        messageTypes = {
-            'WithdrawFromBridge2SignPayload': [
+        messageTypes: dict = {
+            'HyperliquidTransaction:Withdraw': [
+                {'name': 'hyperliquidChain', 'type': 'string'},
                 {'name': 'destination', 'type': 'string'},
-                {'name': 'usd', 'type': 'string'},
+                {'name': 'amount', 'type': 'string'},
                 {'name': 'time', 'type': 'uint64'},
             ],
         }
-        return self.build_sig(chainId, messageTypes, message)
+        return self.sign_user_signed_action(messageTypes, message)
 
     async def create_order(self, symbol: str, type: OrderType, side: OrderSide, amount: float, price: Num = None, params={}):
         """
@@ -741,7 +1004,7 @@ class hyperliquid(Exchange, ImplicitAPI):
         :param str type: 'market' or 'limit'
         :param str side: 'buy' or 'sell'
         :param float amount: how much of currency you want to trade in units of base currency
-        :param float [price]: the price at which the order is to be fullfilled, in units of the quote currency, ignored in market orders
+        :param float [price]: the price at which the order is to be fulfilled, in units of the quote currency, ignored in market orders
         :param dict [params]: extra parameters specific to the exchange API endpoint
         :param str [params.timeInForce]: 'Gtc', 'Ioc', 'Alo'
         :param bool [params.postOnly]: True or False whether the order is post-only
@@ -765,7 +1028,7 @@ class hyperliquid(Exchange, ImplicitAPI):
             'price': price,
             'params': params,
         }
-        globalParams = {}
+        globalParams: dict = {}
         if vaultAddress is not None:
             globalParams['vaultAddress'] = vaultAddress
         response = await self.create_orders([order], globalParams)
@@ -834,7 +1097,7 @@ class hyperliquid(Exchange, ImplicitAPI):
                 px = self.price_to_precision(symbol, price)
             sz = self.amount_to_precision(symbol, amount)
             reduceOnly = self.safe_bool(orderParams, 'reduceOnly', False)
-            orderType = {}
+            orderType: dict = {}
             if isTrigger:
                 isTp = False
                 if takeProfitPrice is not None:
@@ -852,7 +1115,7 @@ class hyperliquid(Exchange, ImplicitAPI):
                     'tif': timeInForce,
                 }
             orderParams = self.omit(orderParams, ['clientOrderId', 'slippage', 'triggerPrice', 'stopPrice', 'stopLossPrice', 'takeProfitPrice', 'timeInForce', 'client_id', 'reduceOnly', 'postOnly'])
-            orderObj = {
+            orderObj: dict = {
                 'a': self.parse_to_int(market['baseId']),
                 'b': isBuy,
                 'p': px,
@@ -863,9 +1126,9 @@ class hyperliquid(Exchange, ImplicitAPI):
             }
             if clientOrderId is not None:
                 orderObj['c'] = clientOrderId
-            orderReq.append(self.extend(orderObj, orderParams))
+            orderReq.append(orderObj)
         vaultAddress = self.format_vault_address(self.safe_string(params, 'vaultAddress'))
-        orderAction = {
+        orderAction: dict = {
             'type': 'order',
             'orders': orderReq,
             'grouping': 'na',
@@ -874,7 +1137,7 @@ class hyperliquid(Exchange, ImplicitAPI):
         if vaultAddress is None:
             orderAction['brokerCode'] = 1
         signature = self.sign_l1_action(orderAction, nonce, vaultAddress)
-        request = {
+        request: dict = {
             'action': orderAction,
             'nonce': nonce,
             'signature': signature,
@@ -883,7 +1146,7 @@ class hyperliquid(Exchange, ImplicitAPI):
         if vaultAddress is not None:
             params = self.omit(params, 'vaultAddress')
             request['vaultAddress'] = vaultAddress
-        response = await self.privatePostExchange(self.extend(request, params))
+        response = await self.privatePostExchange(request)
         #
         #     {
         #         "status": "ok",
@@ -915,9 +1178,11 @@ class hyperliquid(Exchange, ImplicitAPI):
         :param str symbol: unified symbol of the market the order was made in
         :param dict [params]: extra parameters specific to the exchange API endpoint
         :param str [params.clientOrderId]: client order id,(optional 128 bit hex string e.g. 0x1234567890abcdef1234567890abcdef)
+        :param str [params.vaultAddress]: the vault address for order
         :returns dict: An `order structure <https://docs.ccxt.com/#/?id=order-structure>`
         """
-        return await self.cancel_orders([id], symbol, params)
+        orders = await self.cancel_orders([id], symbol, params)
+        return self.safe_dict(orders, 0)
 
     async def cancel_orders(self, ids: List[str], symbol: Str = None, params={}):
         """
@@ -928,6 +1193,7 @@ class hyperliquid(Exchange, ImplicitAPI):
         :param str [symbol]: unified market symbol
         :param dict [params]: extra parameters specific to the exchange API endpoint
         :param string|str[] [params.clientOrderId]: client order ids,(optional 128 bit hex string e.g. 0x1234567890abcdef1234567890abcdef)
+        :param str [params.vaultAddress]: the vault address
         :returns dict: an list of `order structures <https://docs.ccxt.com/#/?id=order-structure>`
         """
         self.check_required_credentials()
@@ -938,12 +1204,12 @@ class hyperliquid(Exchange, ImplicitAPI):
         clientOrderId = self.safe_value_2(params, 'clientOrderId', 'client_id')
         params = self.omit(params, ['clientOrderId', 'client_id'])
         nonce = self.milliseconds()
-        request = {
+        request: dict = {
             'nonce': nonce,
             # 'vaultAddress': vaultAddress,
         }
         cancelReq = []
-        cancelAction = {
+        cancelAction: dict = {
             'type': '',
             'cancels': [],
         }
@@ -972,7 +1238,83 @@ class hyperliquid(Exchange, ImplicitAPI):
         if vaultAddress is not None:
             params = self.omit(params, 'vaultAddress')
             request['vaultAddress'] = vaultAddress
-        response = await self.privatePostExchange(self.extend(request, params))
+        response = await self.privatePostExchange(request)
+        #
+        #     {
+        #         "status":"ok",
+        #         "response":{
+        #             "type":"cancel",
+        #             "data":{
+        #                 "statuses":[
+        #                     "success"
+        #                 ]
+        #             }
+        #         }
+        #     }
+        #
+        innerResponse = self.safe_dict(response, 'response')
+        data = self.safe_dict(innerResponse, 'data')
+        statuses = self.safe_list(data, 'statuses')
+        orders = []
+        for i in range(0, len(statuses)):
+            status = statuses[i]
+            orders.append(self.safe_order({
+                'info': status,
+                'status': status,
+            }))
+        return orders
+
+    async def cancel_orders_for_symbols(self, orders: List[CancellationRequest], params={}):
+        """
+        cancel multiple orders for multiple symbols
+        :see: https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint#cancel-order-s
+        :see: https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint#cancel-order-s-by-cloid
+        :param CancellationRequest[] orders: each order should contain the parameters required by cancelOrder namely id and symbol, example [{"id": "a", "symbol": "BTC/USDT"}, {"id": "b", "symbol": "ETH/USDT"}]
+        :param dict [params]: extra parameters specific to the exchange API endpoint
+        :param str [params.vaultAddress]: the vault address
+        :returns dict: an list of `order structures <https://docs.ccxt.com/#/?id=order-structure>`
+        """
+        self.check_required_credentials()
+        await self.load_markets()
+        nonce = self.milliseconds()
+        request: dict = {
+            'nonce': nonce,
+            # 'vaultAddress': vaultAddress,
+        }
+        cancelReq = []
+        cancelAction: dict = {
+            'type': '',
+            'cancels': [],
+        }
+        cancelByCloid = False
+        for i in range(0, len(orders)):
+            order = orders[i]
+            clientOrderId = self.safe_string(order, 'clientOrderId')
+            if clientOrderId is not None:
+                cancelByCloid = True
+            id = self.safe_string(order, 'id')
+            symbol = self.safe_string(order, 'symbol')
+            if symbol is None:
+                raise ArgumentsRequired(self.id + ' cancelOrdersForSymbols() requires a symbol argument in each order')
+            if id is not None and cancelByCloid:
+                raise BadRequest(self.id + ' cancelOrdersForSymbols() all orders must have either id or clientOrderId')
+            assetKey = 'asset' if cancelByCloid else 'a'
+            idKey = 'cloid' if cancelByCloid else 'o'
+            market = self.market(symbol)
+            cancelObj: dict = {}
+            cancelObj[assetKey] = self.parse_to_numeric(market['baseId'])
+            cancelObj[idKey] = clientOrderId if cancelByCloid else self.parse_to_numeric(id)
+            cancelReq.append(cancelObj)
+        cancelAction['type'] = 'cancelByCloid' if cancelByCloid else 'cancel'
+        cancelAction['cancels'] = cancelReq
+        vaultAddress = self.format_vault_address(self.safe_string(params, 'vaultAddress'))
+        signature = self.sign_l1_action(cancelAction, nonce, vaultAddress)
+        request['action'] = cancelAction
+        request['signature'] = signature
+        if vaultAddress is not None:
+            params = self.omit(params, 'vaultAddress')
+            request['vaultAddress'] = vaultAddress
+        response = await self.privatePostExchange(request)
         #
         #     {
         #         "status":"ok",
@@ -988,6 +1330,42 @@ class hyperliquid(Exchange, ImplicitAPI):
         #
         return response
 
+    async def cancel_all_orders_after(self, timeout: Int, params={}):
+        """
+        dead man's switch, cancel all orders after the given timeout
+        :param number timeout: time in milliseconds, 0 represents cancel the timer
+        :param dict [params]: extra parameters specific to the exchange API endpoint
+        :param str [params.vaultAddress]: the vault address
+        :returns dict: the api result
+        """
+        self.check_required_credentials()
+        await self.load_markets()
+        params = self.omit(params, ['clientOrderId', 'client_id'])
+        nonce = self.milliseconds()
+        request: dict = {
+            'nonce': nonce,
+            # 'vaultAddress': vaultAddress,
+        }
+        cancelAction: dict = {
+            'type': 'scheduleCancel',
+            'time': nonce + timeout,
+        }
+        vaultAddress = self.format_vault_address(self.safe_string(params, 'vaultAddress'))
+        signature = self.sign_l1_action(cancelAction, nonce, vaultAddress)
+        request['action'] = cancelAction
+        request['signature'] = signature
+        if vaultAddress is not None:
+            params = self.omit(params, 'vaultAddress')
+            request['vaultAddress'] = vaultAddress
+        response = await self.privatePostExchange(request)
+        #
+        #     {
+        #         "status":"err",
+        #         "response":"Cannot set scheduled cancel time until enough volume traded. Required: $1000000. Traded: $373.47205."
+        #     }
+        #
+        return response
+
     async def edit_order(self, id: str, symbol: str, type: str, side: str, amount: Num = None, price: Num = None, params={}):
         """
         edit a trade order
@@ -998,7 +1376,7 @@ class hyperliquid(Exchange, ImplicitAPI):
         :param str type: 'market' or 'limit'
         :param str side: 'buy' or 'sell'
         :param float amount: how much of currency you want to trade in units of base currency
-        :param float [price]: the price at which the order is to be fullfilled, in units of the base currency, ignored in market orders
+        :param float [price]: the price at which the order is to be fulfilled, in units of the quote currency, ignored in market orders
         :param dict [params]: extra parameters specific to the exchange API endpoint
         :param str [params.timeInForce]: 'Gtc', 'Ioc', 'Alo'
         :param bool [params.postOnly]: True or False whether the order is post-only
@@ -1038,7 +1416,7 @@ class hyperliquid(Exchange, ImplicitAPI):
             px = self.price_to_precision(symbol, str(price))
         sz = self.amount_to_precision(symbol, amount)
         reduceOnly = self.safe_bool(params, 'reduceOnly', False)
-        orderType = {}
+        orderType: dict = {}
         if isTrigger:
             isTp = False
             if takeProfitPrice is not None:
@@ -1058,7 +1436,7 @@ class hyperliquid(Exchange, ImplicitAPI):
         if triggerPrice is None:
             triggerPrice = '0'
         nonce = self.milliseconds()
-        orderReq = {
+        orderReq: dict = {
             'a': self.parse_to_int(market['baseId']),
             'b': isBuy,
             'p': px,
@@ -1069,17 +1447,17 @@ class hyperliquid(Exchange, ImplicitAPI):
         }
         if clientOrderId is not None:
             orderReq['c'] = clientOrderId
-        modifyReq = {
+        modifyReq: dict = {
             'oid': self.parse_to_int(id),
             'order': orderReq,
         }
-        modifyAction = {
+        modifyAction: dict = {
             'type': 'batchModify',
             'modifies': [modifyReq],
         }
         vaultAddress = self.format_vault_address(self.safe_string(params, 'vaultAddress'))
         signature = self.sign_l1_action(modifyAction, nonce, vaultAddress)
-        request = {
+        request: dict = {
             'action': modifyAction,
             'nonce': nonce,
             'signature': signature,
@@ -1088,7 +1466,7 @@ class hyperliquid(Exchange, ImplicitAPI):
         if vaultAddress is not None:
             params = self.omit(params, 'vaultAddress')
             request['vaultAddress'] = vaultAddress
-        response = await self.privatePostExchange(self.extend(request, params))
+        response = await self.privatePostExchange(request)
         #
         #     {
         #         "status": "ok",
@@ -1143,7 +1521,7 @@ class hyperliquid(Exchange, ImplicitAPI):
         """
         await self.load_markets()
         market = self.market(symbol)
-        request = {
+        request: dict = {
             'type': 'fundingHistory',
             'coin': market['base'],
         }
@@ -1189,14 +1567,17 @@ class hyperliquid(Exchange, ImplicitAPI):
         :param int [limit]: the maximum number of open orders structures to retrieve
         :param dict [params]: extra parameters specific to the exchange API endpoint
         :param str [params.user]: user address, will default to self.walletAddress if not provided
+        :param str [params.method]: 'openOrders' or 'frontendOpenOrders' default is 'frontendOpenOrders'
         :returns Order[]: a list of `order structures <https://docs.ccxt.com/#/?id=order-structure>`
         """
         userAddress = None
         userAddress, params = self.handle_public_address('fetchOpenOrders', params)
+        method = None
+        method, params = self.handle_option_and_params(params, 'fetchOpenOrders', 'method', 'frontendOpenOrders')
         await self.load_markets()
         market = self.safe_market(symbol)
-        request = {
-            'type': 'openOrders',
+        request: dict = {
+            'type': method,
             'user': userAddress,
         }
         response = await self.publicPostInfo(self.extend(request, params))
@@ -1229,7 +1610,7 @@ class hyperliquid(Exchange, ImplicitAPI):
         userAddress, params = self.handle_public_address('fetchClosedOrders', params)
         await self.load_markets()
         market = self.safe_market(symbol)
-        request = {
+        request: dict = {
             'type': 'historicalOrders',
             'user': userAddress,
         }
@@ -1262,7 +1643,7 @@ class hyperliquid(Exchange, ImplicitAPI):
         userAddress, params = self.handle_public_address('fetchOrder', params)
         await self.load_markets()
         market = self.safe_market(symbol)
-        request = {
+        request: dict = {
             'type': 'orderStatus',
             'oid': self.parse_to_numeric(id),
             'user': userAddress,
@@ -1298,7 +1679,7 @@ class hyperliquid(Exchange, ImplicitAPI):
         data = self.safe_dict(response, 'order')
         return self.parse_order(data, market)
 
-    def parse_order(self, order, market: Market = None) -> Order:
+    def parse_order(self, order: dict, market: Market = None) -> Order:
         #
         #  fetchOpenOrders
         #
@@ -1370,6 +1751,25 @@ class hyperliquid(Exchange, ImplicitAPI):
         #           "oid":6195281425
         #        }
         #     }
+        # frontendOrder
+        # {
+        #     "children": [],
+        #     "cloid": null,
+        #     "coin": "BLUR",
+        #     "isPositionTpsl": False,
+        #     "isTrigger": True,
+        #     "limitPx": "0.5",
+        #     "oid": 8670487141,
+        #     "orderType": "Stop Limit",
+        #     "origSz": "20.0",
+        #     "reduceOnly": False,
+        #     "side": "B",
+        #     "sz": "20.0",
+        #     "tif": null,
+        #     "timestamp": 1715523663687,
+        #     "triggerCondition": "Price above 0.6",
+        #     "triggerPx": "0.6"
+        # }
         #
         entry = self.safe_dict_n(order, ['order', 'resting', 'filled'])
         if entry is None:
@@ -1377,7 +1777,10 @@ class hyperliquid(Exchange, ImplicitAPI):
         coin = self.safe_string(entry, 'coin')
         marketId = None
         if coin is not None:
-            marketId = coin + '/USDC:USDC'
+            if coin.find('/') > -1:
+                marketId = coin
+            else:
+                marketId = coin + '/USDC:USDC'
         if self.safe_string(entry, 'id') is None:
             market = self.safe_market(marketId, None)
         else:
@@ -1397,7 +1800,7 @@ class hyperliquid(Exchange, ImplicitAPI):
             'lastTradeTimestamp': None,
             'lastUpdateTimestamp': None,
             'symbol': symbol,
-            'type': self.safe_string_lower(entry, 'orderType'),
+            'type': self.parse_order_type(self.safe_string_lower(entry, 'orderType')),
             'timeInForce': self.safe_string_upper(entry, 'tif'),
             'postOnly': None,
             'reduceOnly': self.safe_bool(entry, 'reduceOnly'),
@@ -1414,15 +1817,15 @@ class hyperliquid(Exchange, ImplicitAPI):
             'trades': None,
         }, market)
 
-    def parse_order_status(self, status):
-        statuses = {
+    def parse_order_status(self, status: Str):
+        statuses: dict = {
             'triggered': 'open',
             'filled': 'closed',
         }
         return self.safe_string(statuses, status, status)
 
     def parse_order_type(self, status):
-        statuses = {
+        statuses: dict = {
             'stop limit': 'limit',
             'stop market': 'market',
         }
@@ -1444,7 +1847,7 @@ class hyperliquid(Exchange, ImplicitAPI):
         userAddress, params = self.handle_public_address('fetchMyTrades', params)
         await self.load_markets()
         market = self.safe_market(symbol)
-        request = {
+        request: dict = {
             'user': userAddress,
         }
         if since is not None:
@@ -1479,7 +1882,7 @@ class hyperliquid(Exchange, ImplicitAPI):
         #
         return self.parse_trades(response, market, since, limit)
 
-    def parse_trade(self, trade, market: Market = None) -> Trade:
+    def parse_trade(self, trade: dict, market: Market = None) -> Trade:
         #
         #     {
         #         "closedPnl": "0.19343",
@@ -1551,7 +1954,7 @@ class hyperliquid(Exchange, ImplicitAPI):
         userAddress = None
         userAddress, params = self.handle_public_address('fetchPositions', params)
         symbols = self.market_symbols(symbols)
-        request = {
+        request: dict = {
             'type': 'clearinghouseState',
             'user': userAddress,
         }
@@ -1607,7 +2010,7 @@ class hyperliquid(Exchange, ImplicitAPI):
             result.append(self.parse_position(data[i], None))
         return self.filter_by_array_positions(result, 'symbol', symbols, False)
 
-    def parse_position(self, position, market: Market = None):
+    def parse_position(self, position: dict, market: Market = None):
         #
         #     {
         #         "position": {
@@ -1694,7 +2097,7 @@ class hyperliquid(Exchange, ImplicitAPI):
         isCross = (marginMode == 'cross')
         nonce = self.milliseconds()
         params = self.omit(params, ['leverage'])
-        updateAction = {
+        updateAction: dict = {
             'type': 'updateLeverage',
             'asset': asset,
             'isCross': isCross,
@@ -1705,10 +2108,9 @@ class hyperliquid(Exchange, ImplicitAPI):
             params = self.omit(params, 'vaultAddress')
             if vaultAddress.startswith('0x'):
                 vaultAddress = vaultAddress.replace('0x', '')
-        extendedAction = self.extend(updateAction, params)
-        signature = self.sign_l1_action(extendedAction, nonce, vaultAddress)
-        request = {
-            'action': extendedAction,
+        signature = self.sign_l1_action(updateAction, nonce, vaultAddress)
+        request: dict = {
+            'action': updateAction,
             'nonce': nonce,
             'signature': signature,
             # 'vaultAddress': vaultAddress,
@@ -1744,7 +2146,7 @@ class hyperliquid(Exchange, ImplicitAPI):
         asset = self.parse_to_int(market['baseId'])
         nonce = self.milliseconds()
         params = self.omit(params, 'marginMode')
-        updateAction = {
+        updateAction: dict = {
             'type': 'updateLeverage',
             'asset': asset,
             'isCross': isCross,
@@ -1752,7 +2154,7 @@ class hyperliquid(Exchange, ImplicitAPI):
         }
         vaultAddress = self.format_vault_address(self.safe_string(params, 'vaultAddress'))
         signature = self.sign_l1_action(updateAction, nonce, vaultAddress)
-        request = {
+        request: dict = {
             'action': updateAction,
             'nonce': nonce,
             'signature': signature,
@@ -1761,7 +2163,7 @@ class hyperliquid(Exchange, ImplicitAPI):
         if vaultAddress is not None:
             params = self.omit(params, 'vaultAddress')
             request['vaultAddress'] = vaultAddress
-        response = await self.privatePostExchange(self.extend(request, params))
+        response = await self.privatePostExchange(request)
         #
         #     {
         #         'response': {
@@ -1772,7 +2174,7 @@ class hyperliquid(Exchange, ImplicitAPI):
         #
         return response
 
-    async def add_margin(self, symbol: str, amount, params={}):
+    async def add_margin(self, symbol: str, amount: float, params={}) -> MarginModification:
         """
         add margin
         :see: https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint#update-isolated-margin
@@ -1783,7 +2185,7 @@ class hyperliquid(Exchange, ImplicitAPI):
         """
         return await self.modify_margin_helper(symbol, amount, 'add', params)
 
-    async def reduce_margin(self, symbol: str, amount, params={}):
+    async def reduce_margin(self, symbol: str, amount: float, params={}) -> MarginModification:
         """
         :see: https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint#update-isolated-margin
         remove margin from a position
@@ -1794,7 +2196,7 @@ class hyperliquid(Exchange, ImplicitAPI):
         """
         return await self.modify_margin_helper(symbol, amount, 'reduce', params)
 
-    async def modify_margin_helper(self, symbol: str, amount, type, params={}):
+    async def modify_margin_helper(self, symbol: str, amount, type, params={}) -> MarginModification:
         await self.load_markets()
         market = self.market(symbol)
         asset = self.parse_to_int(market['baseId'])
@@ -1802,7 +2204,7 @@ class hyperliquid(Exchange, ImplicitAPI):
         if type == 'reduce':
             sz = -sz
         nonce = self.milliseconds()
-        updateAction = {
+        updateAction: dict = {
             'type': 'updateIsolatedMargin',
             'asset': asset,
             'isBuy': True,
@@ -1810,7 +2212,7 @@ class hyperliquid(Exchange, ImplicitAPI):
         }
         vaultAddress = self.format_vault_address(self.safe_string(params, 'vaultAddress'))
         signature = self.sign_l1_action(updateAction, nonce, vaultAddress)
-        request = {
+        request: dict = {
             'action': updateAction,
             'nonce': nonce,
             'signature': signature,
@@ -1819,7 +2221,7 @@ class hyperliquid(Exchange, ImplicitAPI):
         if vaultAddress is not None:
             params = self.omit(params, 'vaultAddress')
             request['vaultAddress'] = vaultAddress
-        response = await self.privatePostExchange(self.extend(request, params))
+        response = await self.privatePostExchange(request)
         #
         #     {
         #         'response': {
@@ -1828,10 +2230,28 @@ class hyperliquid(Exchange, ImplicitAPI):
         #         'status': 'ok'
         #     }
         #
-        return response
-        # return self.extend(self.parse_margin_modification(response, market), {
-        #     'code': code,
-        # })
+        return self.extend(self.parse_margin_modification(response, market), {
+            'code': self.safe_string(response, 'status'),
+        })
+
+    def parse_margin_modification(self, data: dict, market: Market = None) -> MarginModification:
+        #
+        #    {
+        #        'type': 'default'
+        #    }
+        #
+        return {
+            'info': data,
+            'symbol': self.safe_symbol(None, market),
+            'type': None,
+            'marginMode': 'isolated',
+            'amount': None,
+            'total': None,
+            'code': self.safe_string(market, 'settle'),
+            'status': None,
+            'timestamp': None,
+            'datetime': None,
+        }
 
     async def transfer(self, code: str, amount: float, fromAccount: str, toAccount: str, params={}) -> TransferEntry:
         """
@@ -1839,39 +2259,69 @@ class hyperliquid(Exchange, ImplicitAPI):
         :see: https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint#l1-usdc-transfer
         :param str code: unified currency code
         :param float amount: amount to transfer
-        :param str fromAccount: account to transfer from
-        :param str toAccount: account to transfer to
+        :param str fromAccount: account to transfer from *spot, swap*
+        :param str toAccount: account to transfer to *swap, spot or address*
         :param dict [params]: extra parameters specific to the exchange API endpoint
+        :param str [params.vaultAddress]: the vault address for order
         :returns dict: a `transfer structure <https://docs.ccxt.com/#/?id=transfer-structure>`
         """
         self.check_required_credentials()
         await self.load_markets()
+        isSandboxMode = self.safe_bool(self.options, 'sandboxMode')
+        nonce = self.milliseconds()
+        if self.in_array(fromAccount, ['spot', 'swap', 'perp']):
+            # handle swap <> spot account transfer
+            if not self.in_array(toAccount, ['spot', 'swap', 'perp']):
+                raise NotSupported(self.id + 'transfer() only support spot <> swap transfer')
+            vaultAddress = self.format_vault_address(self.safe_string(params, 'vaultAddress'))
+            params = self.omit(params, 'vaultAddress')
+            toPerp = (toAccount == 'perp') or (toAccount == 'swap')
+            action: dict = {
+                'type': 'spotUser',
+                'classTransfer': {
+                    'usdc': amount,
+                    'toPerp': toPerp,
+                },
+            }
+            signature = self.sign_l1_action(action, nonce, vaultAddress)
+            innerRequest: dict = {
+                'action': action,
+                'nonce': nonce,
+                'signature': signature,
+            }
+            if vaultAddress is not None:
+                innerRequest['vaultAddress'] = vaultAddress
+            transferResponse = await self.privatePostExchange(innerRequest)
+            return transferResponse
+        # handle sub-account/different account transfer
         self.check_address(toAccount)
         if code is not None:
             code = code.upper()
             if code != 'USDC':
-                raise NotSupported(self.id + 'withdraw() only support USDC')
-        isSandboxMode = self.safe_bool(self.options, 'sandboxMode')
-        nonce = self.milliseconds()
-        payload = {
+                raise NotSupported(self.id + 'transfer() only support USDC')
+        payload: dict = {
+            'hyperliquidChain': 'Testnet' if isSandboxMode else 'Mainnet',
             'destination': toAccount,
-            'amount': str(amount),
+            'amount': self.number_to_string(amount),
             'time': nonce,
         }
         sig = self.build_transfer_sig(payload)
-        request = {
+        request: dict = {
             'action': {
-                'chain': 'ArbitrumTestnet' if (isSandboxMode) else 'Arbitrum',
-                'payload': payload,
-                'type': 'usdTransfer',
+                'hyperliquidChain': payload['hyperliquidChain'],
+                'signatureChainId': '0x66eee',  # check self out
+                'destination': toAccount,
+                'amount': str(amount),
+                'time': nonce,
+                'type': 'usdSend',
             },
             'nonce': nonce,
             'signature': sig,
         }
-        response = await self.privatePostExchange(self.extend(request, params))
+        response = await self.privatePostExchange(request)
         return response
 
-    async def withdraw(self, code: str, amount, address, tag=None, params={}):
+    async def withdraw(self, code: str, amount: float, address: str, tag=None, params={}) -> Transaction:
         """
         make a withdrawal(only support USDC)
         :see: https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint#initiate-a-withdrawal-request
@@ -1889,25 +2339,160 @@ class hyperliquid(Exchange, ImplicitAPI):
             code = code.upper()
             if code != 'USDC':
                 raise NotSupported(self.id + 'withdraw() only support USDC')
-        isSandboxMode = self.safe_bool(self.options, 'sandboxMode')
+        isSandboxMode = self.safe_bool(self.options, 'sandboxMode', False)
         nonce = self.milliseconds()
-        payload = {
+        payload: dict = {
+            'hyperliquidChain': 'Testnet' if isSandboxMode else 'Mainnet',
             'destination': address,
-            'usd': str(amount),
+            'amount': str(amount),
             'time': nonce,
         }
         sig = self.build_withdraw_sig(payload)
-        request = {
+        request: dict = {
             'action': {
-                'chain': 'ArbitrumTestnet' if (isSandboxMode) else 'Arbitrum',
-                'payload': payload,
-                'type': 'withdraw2',
+                'hyperliquidChain': payload['hyperliquidChain'],
+                'signatureChainId': '0x66eee',  # check self out
+                'destination': address,
+                'amount': str(amount),
+                'time': nonce,
+                'type': 'withdraw3',
             },
             'nonce': nonce,
             'signature': sig,
         }
-        response = await self.privatePostExchange(self.extend(request, params))
-        return response
+        response = await self.privatePostExchange(request)
+        return self.parse_transaction(response)
+
+    def parse_transaction(self, transaction: dict, currency: Currency = None) -> Transaction:
+        #
+        # {status: 'ok', response: {type: 'default'}}
+        #
+        return {
+            'info': transaction,
+            'id': None,
+            'txid': None,
+            'timestamp': None,
+            'datetime': None,
+            'network': None,
+            'address': None,
+            'addressTo': None,
+            'addressFrom': None,
+            'tag': None,
+            'tagTo': None,
+            'tagFrom': None,
+            'type': None,
+            'amount': None,
+            'currency': None,
+            'status': self.safe_string(transaction, 'status'),
+            'updated': None,
+            'comment': None,
+            'internal': None,
+            'fee': None,
+        }
+
+    async def fetch_trading_fee(self, symbol: str, params={}) -> TradingFeeInterface:
+        """
+        fetch the trading fees for a market
+        :param str symbol: unified market symbol
+        :param dict [params]: extra parameters specific to the exchange API endpoint
+        :param str [params.user]: user address, will default to self.walletAddress if not provided
+        :returns dict: a `fee structure <https://docs.ccxt.com/#/?id=fee-structure>`
+        """
+        await self.load_markets()
+        userAddress = None
+        userAddress, params = self.handle_public_address('fetchTradingFee', params)
+        market = self.market(symbol)
+        request: dict = {
+            'type': 'userFees',
+            'user': userAddress,
+        }
+        response = await self.publicPostInfo(self.extend(request, params))
+        #
+        #     {
+        #         "dailyUserVlm": [
+        #             {
+        #                 "date": "2024-07-08",
+        #                 "userCross": "0.0",
+        #                 "userAdd": "0.0",
+        #                 "exchange": "90597185.23639999"
+        #             }
+        #         ],
+        #         "feeSchedule": {
+        #             "cross": "0.00035",
+        #             "add": "0.0001",
+        #             "tiers": {
+        #                 "vip": [
+        #                     {
+        #                         "ntlCutoff": "5000000.0",
+        #                         "cross": "0.0003",
+        #                         "add": "0.00005"
+        #                     }
+        #                 ],
+        #                 "mm": [
+        #                     {
+        #                         "makerFractionCutoff": "0.005",
+        #                         "add": "-0.00001"
+        #                     }
+        #                 ]
+        #             },
+        #             "referralDiscount": "0.04"
+        #         },
+        #         "userCrossRate": "0.00035",
+        #         "userAddRate": "0.0001",
+        #         "activeReferralDiscount": "0.0"
+        #     }
+        #
+        data: dict = {
+            'userCrossRate': self.safe_string(response, 'userCrossRate'),
+            'userAddRate': self.safe_string(response, 'userAddRate'),
+        }
+        return self.parse_trading_fee(data, market)
+
+    def parse_trading_fee(self, fee: dict, market: Market = None) -> TradingFeeInterface:
+        #
+        #     {
+        #         "dailyUserVlm": [
+        #             {
+        #                 "date": "2024-07-08",
+        #                 "userCross": "0.0",
+        #                 "userAdd": "0.0",
+        #                 "exchange": "90597185.23639999"
+        #             }
+        #         ],
+        #         "feeSchedule": {
+        #             "cross": "0.00035",
+        #             "add": "0.0001",
+        #             "tiers": {
+        #                 "vip": [
+        #                     {
+        #                         "ntlCutoff": "5000000.0",
+        #                         "cross": "0.0003",
+        #                         "add": "0.00005"
+        #                     }
+        #                 ],
+        #                 "mm": [
+        #                     {
+        #                         "makerFractionCutoff": "0.005",
+        #                         "add": "-0.00001"
+        #                     }
+        #                 ]
+        #             },
+        #             "referralDiscount": "0.04"
+        #         },
+        #         "userCrossRate": "0.00035",
+        #         "userAddRate": "0.0001",
+        #         "activeReferralDiscount": "0.0"
+        #     }
+        #
+        symbol = self.safe_symbol(None, market)
+        return {
+            'info': fee,
+            'symbol': symbol,
+            'maker': self.safe_number(fee, 'userAddRate'),
+            'taker': self.safe_number(fee, 'userCrossRate'),
+            'percentage': None,
+            'tierBased': None,
+        }
 
     def format_vault_address(self, address: Str = None):
         if address is None:
@@ -1927,7 +2512,12 @@ class hyperliquid(Exchange, ImplicitAPI):
             return [self.walletAddress, params]
         raise ArgumentsRequired(self.id + ' ' + methodName + '() requires a user parameter inside \'params\' or the wallet address set')
 
-    def handle_errors(self, code, reason, url, method, headers, body, response, requestHeaders, requestBody):
+    def coin_to_market_id(self, coin: Str):
+        if coin.find('/') > -1:
+            return coin  # spot
+        return coin + '/USDC:USDC'
+
+    def handle_errors(self, code: int, reason: str, url: str, method: str, headers: dict, body: str, response, requestHeaders, requestBody):
         if not response:
             return None  # fallback to default error handler
         # {"status":"err","response":"User or API Wallet 0xb8a6f8b26223de27c31938d56e470a5b832703a5 does not exist."}

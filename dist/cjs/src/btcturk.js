@@ -60,8 +60,11 @@ class btcturk extends btcturk$1 {
                 'fetchOrderBook': true,
                 'fetchOrders': true,
                 'fetchPosition': false,
+                'fetchPositionHistory': false,
                 'fetchPositionMode': false,
                 'fetchPositions': false,
+                'fetchPositionsForSymbol': false,
+                'fetchPositionsHistory': false,
                 'fetchPositionsRisk': false,
                 'fetchPremiumIndexOHLCV': false,
                 'fetchTicker': true,
@@ -585,6 +588,7 @@ class btcturk extends btcturk$1 {
             limit = 100; // default value
         }
         if (limit !== undefined) {
+            limit = Math.min(limit, 11000); // max 11000 candles diapason can be covered
             if (timeframe === '1y') { // difficult with leap years
                 throw new errors.BadRequest(this.id + ' fetchOHLCV () does not accept a limit parameter when timeframe == "1y"');
             }
@@ -595,7 +599,7 @@ class btcturk extends btcturk$1 {
                 request['to'] = Math.min(request['to'], to);
             }
             else {
-                request['from'] = this.parseToInt(until / 1000) - limitSeconds;
+                request['from'] = this.parseToInt(0 / 1000) - limitSeconds;
             }
         }
         const response = await this.graphGetKlinesHistory(this.extend(request, params));
@@ -668,7 +672,7 @@ class btcturk extends btcturk$1 {
          * @param {string} type 'market' or 'limit'
          * @param {string} side 'buy' or 'sell'
          * @param {float} amount how much of currency you want to trade in units of base currency
-         * @param {float} [price] the price at which the order is to be fullfilled, in units of the quote currency, ignored in market orders
+         * @param {float} [price] the price at which the order is to be fulfilled, in units of the quote currency, ignored in market orders
          * @param {object} [params] extra parameters specific to the exchange API endpoint
          * @returns {object} an [order structure]{@link https://docs.ccxt.com/#/?id=order-structure}
          */
@@ -707,7 +711,17 @@ class btcturk extends btcturk$1 {
         const request = {
             'id': id,
         };
-        return await this.privateDeleteOrder(this.extend(request, params));
+        const response = await this.privateDeleteOrder(this.extend(request, params));
+        //
+        //    {
+        //        "success": true,
+        //        "message": "SUCCESS",
+        //        "code": 0
+        //    }
+        //
+        return this.safeOrder({
+            'info': response,
+        });
     }
     async fetchOpenOrders(symbol = undefined, since = undefined, limit = undefined, params = {}) {
         /**

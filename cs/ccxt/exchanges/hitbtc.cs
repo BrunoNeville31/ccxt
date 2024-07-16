@@ -83,6 +83,7 @@ public partial class hitbtc : Exchange
                 { "fetchTransactions", "emulated" },
                 { "fetchWithdrawals", true },
                 { "reduceMargin", true },
+                { "sandbox", true },
                 { "setLeverage", true },
                 { "setMargin", false },
                 { "setMarginMode", false },
@@ -417,6 +418,7 @@ public partial class hitbtc : Exchange
                 { "accountsByType", new Dictionary<string, object>() {
                     { "spot", "spot" },
                     { "funding", "wallet" },
+                    { "swap", "derivatives" },
                     { "future", "derivatives" },
                 } },
                 { "withdraw", new Dictionary<string, object>() {
@@ -666,8 +668,8 @@ public partial class hitbtc : Exchange
                 object network = this.safeNetwork(networkId);
                 fee = this.safeNumber(rawNetwork, "payout_fee");
                 object networkPrecision = this.safeNumber(rawNetwork, "precision_payout");
-                object payinEnabledNetwork = this.safeBool(entry, "payin_enabled", false);
-                object payoutEnabledNetwork = this.safeBool(entry, "payout_enabled", false);
+                object payinEnabledNetwork = this.safeBool(rawNetwork, "payin_enabled", false);
+                object payoutEnabledNetwork = this.safeBool(rawNetwork, "payout_enabled", false);
                 object activeNetwork = isTrue(payinEnabledNetwork) && isTrue(payoutEnabledNetwork);
                 if (isTrue(isTrue(payinEnabledNetwork) && !isTrue(depositEnabled)))
                 {
@@ -1532,6 +1534,8 @@ public partial class hitbtc : Exchange
             { "symbol", symbol },
             { "taker", taker },
             { "maker", maker },
+            { "percentage", null },
+            { "tierBased", null },
         };
     }
 
@@ -1658,12 +1662,12 @@ public partial class hitbtc : Exchange
         {
             ((IDictionary<string,object>)request)["from"] = this.iso8601(since);
         }
-        var requestparametersVariable = this.handleUntilOption("till", request, parameters);
+        var requestparametersVariable = this.handleUntilOption("until", request, parameters);
         request = ((IList<object>)requestparametersVariable)[0];
         parameters = ((IList<object>)requestparametersVariable)[1];
         if (isTrue(!isEqual(limit, null)))
         {
-            ((IDictionary<string,object>)request)["limit"] = limit;
+            ((IDictionary<string,object>)request)["limit"] = mathMin(limit, 1000);
         }
         object price = this.safeString(parameters, "price");
         parameters = this.omit(parameters, "price");
@@ -2296,7 +2300,7 @@ public partial class hitbtc : Exchange
         * @param {string} type 'market' or 'limit'
         * @param {string} side 'buy' or 'sell'
         * @param {float} amount how much of currency you want to trade in units of base currency
-        * @param {float} [price] the price at which the order is to be fullfilled, in units of the quote currency, ignored in market orders
+        * @param {float} [price] the price at which the order is to be fulfilled, in units of the quote currency, ignored in market orders
         * @param {object} [params] extra parameters specific to the exchange API endpoint
         * @param {string} [params.marginMode] 'cross' or 'isolated' only 'isolated' is supported for spot-margin, swap supports both, default is 'cross'
         * @param {bool} [params.margin] true for creating a margin order
@@ -2838,7 +2842,7 @@ public partial class hitbtc : Exchange
         }
         object market = null;
         object request = new Dictionary<string, object>() {};
-        var requestparametersVariable = this.handleUntilOption("till", request, parameters);
+        var requestparametersVariable = this.handleUntilOption("until", request, parameters);
         request = ((IList<object>)requestparametersVariable)[0];
         parameters = ((IList<object>)requestparametersVariable)[1];
         if (isTrue(!isEqual(symbol, null)))
@@ -3317,9 +3321,10 @@ public partial class hitbtc : Exchange
                 throw new ArgumentsRequired ((string)add(this.id, " modifyMarginHelper() requires a leverage parameter for swap markets")) ;
             }
         }
-        if (isTrue(!isEqual(amount, 0)))
+        object stringAmount = this.numberToString(amount);
+        if (isTrue(!isEqual(stringAmount, "0")))
         {
-            amount = this.amountToPrecision(symbol, amount);
+            amount = this.amountToPrecision(symbol, stringAmount);
         } else
         {
             amount = "0";
@@ -3375,17 +3380,42 @@ public partial class hitbtc : Exchange
         });
     }
 
-    public virtual object parseMarginModification(object data, object market = null)
+    public override object parseMarginModification(object data, object market = null)
     {
+        //
+        // addMargin/reduceMargin
+        //
+        //     {
+        //         "symbol": "BTCUSDT_PERP",
+        //         "type": "isolated",
+        //         "leverage": "8.00",
+        //         "created_at": "2022-03-30T23:34:27.161Z",
+        //         "updated_at": "2022-03-30T23:34:27.161Z",
+        //         "currencies": [
+        //             {
+        //                 "code": "USDT",
+        //                 "margin_balance": "7.000000000000",
+        //                 "reserved_orders": "0",
+        //                 "reserved_positions": "0"
+        //             }
+        //         ],
+        //         "positions": null
+        //     }
+        //
         object currencies = this.safeValue(data, "currencies", new List<object>() {});
         object currencyInfo = this.safeValue(currencies, 0);
+        object datetime = this.safeString(data, "updated_at");
         return new Dictionary<string, object>() {
             { "info", data },
-            { "type", null },
-            { "amount", null },
-            { "code", this.safeString(currencyInfo, "code") },
             { "symbol", getValue(market, "symbol") },
+            { "type", null },
+            { "marginMode", "isolated" },
+            { "amount", null },
+            { "total", null },
+            { "code", this.safeString(currencyInfo, "code") },
             { "status", null },
+            { "timestamp", this.parse8601(datetime) },
+            { "datetime", datetime },
         };
     }
 
@@ -3405,7 +3435,7 @@ public partial class hitbtc : Exchange
         * @returns {object} a [margin structure]{@link https://docs.ccxt.com/#/?id=reduce-margin-structure}
         */
         parameters ??= new Dictionary<string, object>();
-        if (isTrue(!isEqual(amount, 0)))
+        if (isTrue(!isEqual(this.numberToString(amount), "0")))
         {
             throw new BadRequest ((string)add(this.id, " reduceMargin() on hitbtc requires the amount to be 0 and that will remove the entire margin amount")) ;
         }

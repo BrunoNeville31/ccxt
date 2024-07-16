@@ -91,6 +91,7 @@ class ascendex extends ascendex$1 {
                 'fetchWithdrawal': false,
                 'fetchWithdrawals': true,
                 'reduceMargin': true,
+                'sandbox': true,
                 'setLeverage': true,
                 'setMarginMode': true,
                 'setPositionMode': false,
@@ -358,7 +359,7 @@ class ascendex extends ascendex$1 {
                     '300013': errors.InvalidOrder,
                     '300014': errors.InvalidOrder,
                     '300020': errors.InvalidOrder,
-                    '300021': errors.InvalidOrder,
+                    '300021': errors.AccountSuspended,
                     '300031': errors.InvalidOrder,
                     '310001': errors.InsufficientFunds,
                     '310002': errors.InvalidOrder,
@@ -1402,7 +1403,7 @@ class ascendex extends ascendex$1 {
                 'currency': feeCurrencyCode,
             };
         }
-        const stopPrice = this.safeNumber(order, 'stopPrice');
+        const stopPrice = this.omitZero(this.safeString(order, 'stopPrice'));
         let reduceOnly = undefined;
         const execInst = this.safeString(order, 'execInst');
         if (execInst === 'reduceOnly') {
@@ -1483,6 +1484,8 @@ class ascendex extends ascendex$1 {
                 'symbol': symbol,
                 'maker': this.safeNumber(takerMaker, 'maker'),
                 'taker': this.safeNumber(takerMaker, 'taker'),
+                'percentage': undefined,
+                'tierBased': undefined,
             };
         }
         return result;
@@ -1497,7 +1500,7 @@ class ascendex extends ascendex$1 {
          * @param {string} type 'market' or 'limit'
          * @param {string} side 'buy' or 'sell'
          * @param {float} amount how much you want to trade in units of the base currency
-         * @param {float} [price] the price at which the order is to be fullfilled, in units of the quote currency, ignored in market orders
+         * @param {float} [price] the price at which the order is to be fulfilled, in units of the quote currency, ignored in market orders
          * @param {object} [params] extra parameters specific to the exchange API endpoint
          * @param {string} [params.timeInForce] "GTC", "IOC", "FOK", or "PO"
          * @param {bool} [params.postOnly] true or false
@@ -1586,7 +1589,7 @@ class ascendex extends ascendex$1 {
          * @param {string} type "limit" or "market"
          * @param {string} side "buy" or "sell"
          * @param {float} amount the amount of currency to trade
-         * @param {float} [price] *ignored in "market" orders* the price at which the order is to be fullfilled at in units of the quote currency
+         * @param {float} [price] the price at which the order is to be fulfilled, in units of the quote currency, ignored in market orders
          * @param {object} [params] extra parameters specific to the exchange API endpoint
          * @param {string} [params.timeInForce] "GTC", "IOC", "FOK", or "PO"
          * @param {bool} [params.postOnly] true or false
@@ -2302,7 +2305,7 @@ class ascendex extends ascendex$1 {
          * @see https://ascendex.github.io/ascendex-futures-pro-api-v2/#cancel-all-open-orders
          * @param {string} symbol unified market symbol, only orders in the market of this symbol are cancelled when symbol is not undefined
          * @param {object} [params] extra parameters specific to the exchange API endpoint
-         * @returns {object[]} a list of [order structures]{@link https://docs.ccxt.com/#/?id=order-structure}
+         * @returns {object[]} a list with a single [order structure]{@link https://docs.ccxt.com/#/?id=order-structure} with the response assigned to the info property
          */
         await this.loadMarkets();
         await this.loadAccounts();
@@ -2368,7 +2371,9 @@ class ascendex extends ascendex$1 {
         //         }
         //     }
         //
-        return response;
+        return this.safeOrder({
+            'info': response,
+        });
     }
     parseDepositAddress(depositAddress, currency = undefined) {
         //
@@ -2873,15 +2878,26 @@ class ascendex extends ascendex$1 {
         });
     }
     parseMarginModification(data, market = undefined) {
+        //
+        // addMargin/reduceMargin
+        //
+        //     {
+        //          "code": 0
+        //     }
+        //
         const errorCode = this.safeString(data, 'code');
         const status = (errorCode === '0') ? 'ok' : 'failed';
         return {
             'info': data,
-            'type': undefined,
-            'amount': undefined,
-            'code': market['quote'],
             'symbol': market['symbol'],
+            'type': undefined,
+            'marginMode': 'isolated',
+            'amount': undefined,
+            'total': undefined,
+            'code': market['quote'],
             'status': status,
+            'timestamp': undefined,
+            'datetime': undefined,
         };
     }
     async reduceMargin(symbol, amount, params = {}) {
@@ -3148,7 +3164,6 @@ class ascendex extends ascendex$1 {
         const account = this.safeValue(this.accounts, 0, {});
         const accountGroup = this.safeString(account, 'id');
         const currency = this.currency(code);
-        amount = this.currencyToPrecision(code, amount);
         const accountsByType = this.safeValue(this.options, 'accountsByType', {});
         const fromId = this.safeString(accountsByType, fromAccount, fromAccount);
         const toId = this.safeString(accountsByType, toAccount, toAccount);
@@ -3157,7 +3172,7 @@ class ascendex extends ascendex$1 {
         }
         const request = {
             'account-group': accountGroup,
-            'amount': amount,
+            'amount': this.currencyToPrecision(code, amount),
             'asset': currency['id'],
             'fromAccount': fromId,
             'toAccount': toId,
@@ -3181,7 +3196,7 @@ class ascendex extends ascendex$1 {
         //
         //    { "code": "0" }
         //
-        const status = this.safeInteger(transfer, 'code');
+        const status = this.safeString(transfer, 'code');
         const currencyCode = this.safeCurrencyCode(undefined, currency);
         return {
             'info': transfer,
@@ -3196,7 +3211,7 @@ class ascendex extends ascendex$1 {
         };
     }
     parseTransferStatus(status) {
-        if (status === 0) {
+        if (status === '0') {
             return 'ok';
         }
         return 'failed';

@@ -1505,7 +1505,7 @@ class digifinex extends digifinex$1 {
             request['instrument_id'] = market['id'];
             request['granularity'] = timeframe;
             if (limit !== undefined) {
-                request['limit'] = limit;
+                request['limit'] = Math.min(limit, 100);
             }
             response = await this.publicSwapGetPublicCandles(this.extend(request, params));
         }
@@ -1576,7 +1576,7 @@ class digifinex extends digifinex$1 {
          * @param {string} type 'market' or 'limit'
          * @param {string} side 'buy' or 'sell'
          * @param {float} amount how much you want to trade in units of the base currency, spot market orders use the quote currency, swap requires the number of contracts
-         * @param {float} [price] the price at which the order is to be fullfilled, in units of the quote currency, ignored in market orders
+         * @param {float} [price] the price at which the order is to be fulfilled, in units of the quote currency, ignored in market orders
          * @param {object} [params] extra parameters specific to the exchange API endpoint
          * @param {string} [params.timeInForce] "GTC", "IOC", "FOK", or "PO"
          * @param {bool} [params.postOnly] true or false
@@ -1733,7 +1733,7 @@ class digifinex extends digifinex$1 {
          * @param {string} type 'market' or 'limit'
          * @param {string} side 'buy' or 'sell'
          * @param {float} amount how much you want to trade in units of the base currency, spot market orders use the quote currency, swap requires the number of contracts
-         * @param {float} [price] the price at which the order is to be fullfilled, in units of the quote currency, ignored in market orders
+         * @param {float} [price] the price at which the order is to be fulfilled, in units of the quote currency, ignored in market orders
          * @param {object} [params] extra parameters specific to the exchange API endpoint
          * @returns {object} request to be sent to the exchange
          */
@@ -1932,8 +1932,38 @@ class digifinex extends digifinex$1 {
             if (numCanceledOrders !== 1) {
                 throw new errors.OrderNotFound(this.id + ' cancelOrder() ' + id + ' not found');
             }
+            const orders = this.parseCancelOrders(response);
+            return this.safeDict(orders, 0);
         }
-        return response;
+        else {
+            return this.safeOrder({
+                'info': response,
+                'orderId': this.safeString(response, 'data'),
+            });
+        }
+    }
+    parseCancelOrders(response) {
+        const success = this.safeList(response, 'success');
+        const error = this.safeList(response, 'error');
+        const result = [];
+        for (let i = 0; i < success.length; i++) {
+            const order = success[i];
+            result.push(this.safeOrder({
+                'info': order,
+                'id': order,
+                'status': 'canceled',
+            }));
+        }
+        for (let i = 0; i < error.length; i++) {
+            const order = error[i];
+            result.push(this.safeOrder({
+                'info': order,
+                'id': this.safeString2(order, 'order-id', 'order_id'),
+                'status': 'failed',
+                'clientOrderId': this.safeString(order, 'client-order-id'),
+            }));
+        }
+        return result;
     }
     async cancelOrders(ids, symbol = undefined, params = {}) {
         /**
@@ -1966,12 +1996,7 @@ class digifinex extends digifinex$1 {
         //         ]
         //     }
         //
-        const canceledOrders = this.safeValue(response, 'success', []);
-        const numCanceledOrders = canceledOrders.length;
-        if (numCanceledOrders < 1) {
-            throw new errors.OrderNotFound(this.id + ' cancelOrders() error');
-        }
-        return response;
+        return this.parseCancelOrders(response);
     }
     parseOrderStatus(status) {
         const statuses = {
@@ -3366,6 +3391,8 @@ class digifinex extends digifinex$1 {
             'symbol': symbol,
             'maker': this.safeNumber(fee, 'maker_fee_rate'),
             'taker': this.safeNumber(fee, 'taker_fee_rate'),
+            'percentage': undefined,
+            'tierBased': undefined,
         };
     }
     async fetchPositions(symbols = undefined, params = {}) {
@@ -3803,28 +3830,7 @@ class digifinex extends digifinex$1 {
         //
         const data = this.safeValue(response, 'data', []);
         symbols = this.marketSymbols(symbols);
-        return this.parseLeverageTiers(data, symbols, 'symbol');
-    }
-    parseLeverageTiers(response, symbols = undefined, marketIdKey = undefined) {
-        const result = {};
-        for (let i = 0; i < response.length; i++) {
-            const entry = response[i];
-            const marketId = this.safeString(entry, 'instrument_id');
-            const market = this.safeMarket(marketId);
-            const symbol = this.safeSymbol(marketId, market);
-            let symbolsLength = 0;
-            this.parseMarketLeverageTiers(response[i], market);
-            if (symbols !== undefined) {
-                symbolsLength = symbols.length;
-                if (this.inArray(symbol, symbols)) {
-                    result[symbol] = this.parseMarketLeverageTiers(response[i], market);
-                }
-            }
-            if (symbol !== undefined && (symbolsLength === 0 || this.inArray(symbols, symbol))) {
-                result[symbol] = this.parseMarketLeverageTiers(response[i], market);
-            }
-        }
-        return result;
+        return this.parseLeverageTiers(data, symbols, 'instrument_id');
     }
     async fetchMarketLeverageTiers(symbol, params = {}) {
         /**
@@ -4131,12 +4137,15 @@ class digifinex extends digifinex$1 {
         const rawType = this.safeInteger(data, 'type');
         return {
             'info': data,
+            'symbol': this.safeSymbol(marketId, market, undefined, 'swap'),
             'type': (rawType === 1) ? 'add' : 'reduce',
+            'marginMode': 'isolated',
             'amount': this.safeNumber(data, 'amount'),
             'total': undefined,
             'code': market['settle'],
-            'symbol': this.safeSymbol(marketId, market, undefined, 'swap'),
             'status': undefined,
+            'timestamp': undefined,
+            'datetime': undefined,
         };
     }
     async fetchFundingHistory(symbol = undefined, since = undefined, limit = undefined, params = {}) {

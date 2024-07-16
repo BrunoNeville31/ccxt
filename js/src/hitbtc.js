@@ -94,6 +94,7 @@ export default class hitbtc extends Exchange {
                 'fetchTransactions': 'emulated',
                 'fetchWithdrawals': true,
                 'reduceMargin': true,
+                'sandbox': true,
                 'setLeverage': true,
                 'setMargin': false,
                 'setMarginMode': false,
@@ -618,6 +619,7 @@ export default class hitbtc extends Exchange {
                 'accountsByType': {
                     'spot': 'spot',
                     'funding': 'wallet',
+                    'swap': 'derivatives',
                     'future': 'derivatives',
                 },
                 'withdraw': {
@@ -853,8 +855,8 @@ export default class hitbtc extends Exchange {
                 const network = this.safeNetwork(networkId);
                 fee = this.safeNumber(rawNetwork, 'payout_fee');
                 const networkPrecision = this.safeNumber(rawNetwork, 'precision_payout');
-                const payinEnabledNetwork = this.safeBool(entry, 'payin_enabled', false);
-                const payoutEnabledNetwork = this.safeBool(entry, 'payout_enabled', false);
+                const payinEnabledNetwork = this.safeBool(rawNetwork, 'payin_enabled', false);
+                const payoutEnabledNetwork = this.safeBool(rawNetwork, 'payout_enabled', false);
                 const activeNetwork = payinEnabledNetwork && payoutEnabledNetwork;
                 if (payinEnabledNetwork && !depositEnabled) {
                     depositEnabled = true;
@@ -1628,6 +1630,8 @@ export default class hitbtc extends Exchange {
             'symbol': symbol,
             'taker': taker,
             'maker': maker,
+            'percentage': undefined,
+            'tierBased': undefined,
         };
     }
     async fetchTradingFee(symbol, params = {}) {
@@ -1735,9 +1739,9 @@ export default class hitbtc extends Exchange {
         if (since !== undefined) {
             request['from'] = this.iso8601(since);
         }
-        [request, params] = this.handleUntilOption('till', request, params);
+        [request, params] = this.handleUntilOption('until', request, params);
         if (limit !== undefined) {
-            request['limit'] = limit;
+            request['limit'] = Math.min(limit, 1000);
         }
         const price = this.safeString(params, 'price');
         params = this.omit(params, 'price');
@@ -2288,7 +2292,7 @@ export default class hitbtc extends Exchange {
          * @param {string} type 'market' or 'limit'
          * @param {string} side 'buy' or 'sell'
          * @param {float} amount how much of currency you want to trade in units of base currency
-         * @param {float} [price] the price at which the order is to be fullfilled, in units of the quote currency, ignored in market orders
+         * @param {float} [price] the price at which the order is to be fulfilled, in units of the quote currency, ignored in market orders
          * @param {object} [params] extra parameters specific to the exchange API endpoint
          * @param {string} [params.marginMode] 'cross' or 'isolated' only 'isolated' is supported for spot-margin, swap supports both, default is 'cross'
          * @param {bool} [params.margin] true for creating a margin order
@@ -2807,11 +2811,11 @@ export default class hitbtc extends Exchange {
         // 'symbols': Comma separated list of symbol codes,
         // 'sort': 'DESC' or 'ASC'
         // 'from': 'Datetime or Number',
-        // 'till': 'Datetime or Number',
+        // 'until': 'Datetime or Number',
         // 'limit': 100,
         // 'offset': 0,
         };
-        [request, params] = this.handleUntilOption('till', request, params);
+        [request, params] = this.handleUntilOption('until', request, params);
         if (symbol !== undefined) {
             market = this.market(symbol);
             symbol = market['symbol'];
@@ -3242,8 +3246,9 @@ export default class hitbtc extends Exchange {
                 throw new ArgumentsRequired(this.id + ' modifyMarginHelper() requires a leverage parameter for swap markets');
             }
         }
-        if (amount !== 0) {
-            amount = this.amountToPrecision(symbol, amount);
+        const stringAmount = this.numberToString(amount);
+        if (stringAmount !== '0') {
+            amount = this.amountToPrecision(symbol, stringAmount);
         }
         else {
             amount = '0';
@@ -3295,15 +3300,40 @@ export default class hitbtc extends Exchange {
         });
     }
     parseMarginModification(data, market = undefined) {
+        //
+        // addMargin/reduceMargin
+        //
+        //     {
+        //         "symbol": "BTCUSDT_PERP",
+        //         "type": "isolated",
+        //         "leverage": "8.00",
+        //         "created_at": "2022-03-30T23:34:27.161Z",
+        //         "updated_at": "2022-03-30T23:34:27.161Z",
+        //         "currencies": [
+        //             {
+        //                 "code": "USDT",
+        //                 "margin_balance": "7.000000000000",
+        //                 "reserved_orders": "0",
+        //                 "reserved_positions": "0"
+        //             }
+        //         ],
+        //         "positions": null
+        //     }
+        //
         const currencies = this.safeValue(data, 'currencies', []);
         const currencyInfo = this.safeValue(currencies, 0);
+        const datetime = this.safeString(data, 'updated_at');
         return {
             'info': data,
-            'type': undefined,
-            'amount': undefined,
-            'code': this.safeString(currencyInfo, 'code'),
             'symbol': market['symbol'],
+            'type': undefined,
+            'marginMode': 'isolated',
+            'amount': undefined,
+            'total': undefined,
+            'code': this.safeString(currencyInfo, 'code'),
             'status': undefined,
+            'timestamp': this.parse8601(datetime),
+            'datetime': datetime,
         };
     }
     async reduceMargin(symbol, amount, params = {}) {
@@ -3320,7 +3350,7 @@ export default class hitbtc extends Exchange {
          * @param {bool} [params.margin] true for reducing spot-margin
          * @returns {object} a [margin structure]{@link https://docs.ccxt.com/#/?id=reduce-margin-structure}
          */
-        if (amount !== 0) {
+        if (this.numberToString(amount) !== '0') {
             throw new BadRequest(this.id + ' reduceMargin() on hitbtc requires the amount to be 0 and that will remove the entire margin amount');
         }
         return await this.modifyMarginHelper(symbol, amount, 'reduce', params);

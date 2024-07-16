@@ -68,7 +68,7 @@ public partial class hyperliquid : ccxt.hyperliquid
             { "method", "subscribe" },
             { "subscription", new Dictionary<string, object>() {
                 { "type", "l2Book" },
-                { "coin", getValue(market, "base") },
+                { "coin", ((bool) isTrue(getValue(market, "swap"))) ? getValue(market, "base") : getValue(market, "id") },
             } },
         };
         object message = this.extend(request, parameters);
@@ -105,7 +105,7 @@ public partial class hyperliquid : ccxt.hyperliquid
         //
         object entry = this.safeDict(message, "data", new Dictionary<string, object>() {});
         object coin = this.safeString(entry, "coin");
-        object marketId = add(coin, "/USDC:USDC");
+        object marketId = this.coinToMarketId(coin);
         object market = this.market(marketId);
         object symbol = getValue(market, "symbol");
         object rawData = this.safeList(entry, "levels", new List<object>() {});
@@ -137,7 +137,7 @@ public partial class hyperliquid : ccxt.hyperliquid
         * @param {int} [limit] the maximum number of order structures to retrieve
         * @param {object} [params] extra parameters specific to the exchange API endpoint
         * @param {string} [params.user] user address, will default to this.walletAddress if not provided
-        * @returns {object[]} a list of [order structures]{@link https://docs.ccxt.com/#/?id=order-structure
+        * @returns {object[]} a list of [order structures]{@link https://docs.ccxt.com/#/?id=order-structure}
         */
         parameters ??= new Dictionary<string, object>();
         object userAddress = null;
@@ -241,7 +241,7 @@ public partial class hyperliquid : ccxt.hyperliquid
         * @param {int} [since] the earliest time in ms to fetch trades for
         * @param {int} [limit] the maximum number of trade structures to retrieve
         * @param {object} [params] extra parameters specific to the exchange API endpoint
-        * @returns {object[]} a list of [trade structures]{@link https://docs.ccxt.com/#/?id=trade-structure
+        * @returns {object[]} a list of [trade structures]{@link https://docs.ccxt.com/#/?id=trade-structure}
         */
         parameters ??= new Dictionary<string, object>();
         await this.loadMarkets();
@@ -253,7 +253,7 @@ public partial class hyperliquid : ccxt.hyperliquid
             { "method", "subscribe" },
             { "subscription", new Dictionary<string, object>() {
                 { "type", "trades" },
-                { "coin", getValue(market, "base") },
+                { "coin", ((bool) isTrue(getValue(market, "swap"))) ? getValue(market, "base") : getValue(market, "id") },
             } },
         };
         object message = this.extend(request, parameters);
@@ -286,7 +286,7 @@ public partial class hyperliquid : ccxt.hyperliquid
         object entry = this.safeList(message, "data", new List<object>() {});
         object first = this.safeDict(entry, 0, new Dictionary<string, object>() {});
         object coin = this.safeString(first, "coin");
-        object marketId = add(coin, "/USDC:USDC");
+        object marketId = this.coinToMarketId(coin);
         object market = this.market(marketId);
         object symbol = getValue(market, "symbol");
         if (!isTrue((inOp(this.trades, symbol))))
@@ -345,7 +345,7 @@ public partial class hyperliquid : ccxt.hyperliquid
         object price = this.safeString(trade, "px");
         object amount = this.safeString(trade, "sz");
         object coin = this.safeString(trade, "coin");
-        object marketId = add(coin, "/USDC:USDC");
+        object marketId = this.coinToMarketId(coin);
         market = this.safeMarket(marketId, null);
         object symbol = getValue(market, "symbol");
         object id = this.safeString(trade, "tid");
@@ -398,7 +398,7 @@ public partial class hyperliquid : ccxt.hyperliquid
             { "method", "subscribe" },
             { "subscription", new Dictionary<string, object>() {
                 { "type", "candle" },
-                { "coin", getValue(market, "base") },
+                { "coin", ((bool) isTrue(getValue(market, "swap"))) ? getValue(market, "base") : getValue(market, "id") },
                 { "interval", timeframe },
             } },
         };
@@ -433,7 +433,8 @@ public partial class hyperliquid : ccxt.hyperliquid
         //
         object data = this.safeDict(message, "data", new Dictionary<string, object>() {});
         object bs = this.safeString(data, "s");
-        object symbol = add(bs, "/USDC:USDC");
+        object marketId = this.coinToMarketId(bs);
+        object symbol = this.safeSymbol(marketId);
         object timeframe = this.safeString(data, "i");
         if (!isTrue((inOp(this.ohlcvs, symbol))))
         {
@@ -463,7 +464,7 @@ public partial class hyperliquid : ccxt.hyperliquid
         * @param {int} [limit] the maximum number of order structures to retrieve
         * @param {object} [params] extra parameters specific to the exchange API endpoint
         * @param {string} [params.user] user address, will default to this.walletAddress if not provided
-        * @returns {object[]} a list of [order structures]{@link https://docs.ccxt.com/#/?id=order-structure
+        * @returns {object[]} a list of [order structures]{@link https://docs.ccxt.com/#/?id=order-structure}
         */
         parameters ??= new Dictionary<string, object>();
         await this.loadMarkets();
